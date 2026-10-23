@@ -690,7 +690,14 @@ pub fn check(st: &KernelState, scan: Option<&BootScan>, protect: bool, min_boota
     if scan.is_some_and(|s| s.root) && out.iter().all(|f| f.severity <= Severity::Info) {
         out.insert(0, find(Severity::Ok, "Boot setup looks good", "Every bootable kernel has its files and a boot menu entry.", vec![]));
     }
-    out.sort_by(|a, b| b.severity.cmp(&a.severity));
+    // Problems first, then the green summary, then notes.
+    let rank = |s: Severity| match s {
+        Severity::Error => 0,
+        Severity::Warn => 1,
+        Severity::Ok => 2,
+        Severity::Info => 3,
+    };
+    out.sort_by_key(|f| rank(f.severity));
     out
 }
 
@@ -729,7 +736,11 @@ fn check_bootloader(st: &KernelState, scan: &BootScan, bootable: &[&KernelEntry]
                 }
                 if let Some(p) = t.split_whitespace().nth(1) {
                     let name = p.rsplit('/').next().unwrap_or(p);
-                    let present = st.kernels.iter().any(|k| k.image.as_deref() == Some(name));
+                    // Compare with what is really in /boot (kernel-*, *.old … included).
+                    let present = match scan.listing("/boot") {
+                        Some(l) => l.entries.iter().any(|e| e.name == name),
+                        None => st.kernels.iter().any(|k| k.image.as_deref() == Some(name)),
+                    };
                     if !present && (name.starts_with("vmlinuz-") || name.starts_with("kernel-")) && !stale.contains(&name.to_string()) {
                         stale.push(name.to_string());
                     }
@@ -868,6 +879,30 @@ mod tests {
         let f = check(&st, Some(&scan), true, 2, true);
         assert!(f.iter().any(|x| x.severity == Severity::Error && x.title.contains("7.2.9-x")), "{f:#?}");
         assert!(f.iter().any(|x| x.title.contains("no longer exist") && x.detail.contains("vmlinuz-6.1.0-old")));
+    }
+
+    #[test]
+    fn grub_entries_for_existing_files_are_not_stale() {
+        let st = state();
+        let scan = BootScan {
+            root: true,
+            files: vec![portagehub::protocol::ScannedFile {
+                path: "/boot/grub/grub.cfg".into(),
+                content: "linux /root/boot/vmlinuz-7.3.0-x\nlinux /root/boot/vmlinuz-7.2.11-x\nlinux /root/boot/vmlinuz-7.2.10-x\nlinux /root/boot/vmlinuz-7.2.9-x\nlinux /root/boot/kernel-7.2.9-x\nlinux /root/boot/vmlinuz-7.2.9-x.old\n".into(),
+                mtime: 200,
+            }],
+            listings: vec![portagehub::protocol::Listing {
+                dir: "/boot".into(),
+                entries: ["vmlinuz-7.3.0-x", "vmlinuz-7.2.11-x", "vmlinuz-7.2.10-x", "vmlinuz-7.2.9-x", "kernel-7.2.9-x", "vmlinuz-7.2.9-x.old"]
+                    .iter()
+                    .map(|n| portagehub::protocol::ListEntry { name: n.to_string(), ..Default::default() })
+                    .collect(),
+            }],
+            ..Default::default()
+        };
+        let f = check(&st, Some(&scan), true, 2, true);
+        assert!(!f.iter().any(|x| x.title.contains("no longer exist")), "{f:#?}");
+        assert!(f.iter().any(|x| x.title.contains("GRUB menu has all 4")), "{f:#?}");
     }
 
     #[test]

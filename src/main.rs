@@ -101,9 +101,41 @@ fn self_test() {
     }
 }
 
+/// `portagehub --boot-check <scan.json>`: run the boot check against a saved
+/// boot scan (the JSON the helper returns) and print the findings.
+fn boot_check_cli(path: &str) {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    // Accept either the raw scan or the helper's event stream.
+    let json = text
+        .lines()
+        .find_map(|l| {
+            let v: serde_json::Value = serde_json::from_str(l).ok()?;
+            if v.get("ev").and_then(|e| e.as_str()) == Some("data") { v.get("text").and_then(|t| t.as_str()).map(String::from) } else if v.get("files").is_some() { Some(l.to_string()) } else { None }
+        })
+        .unwrap_or(text);
+    let scan: portagehub::protocol::BootScan = match serde_json::from_str(&json) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("cannot parse {path}: {e}");
+            return;
+        }
+    };
+    let vdb = portage::vdb::load();
+    let settings = settings::Settings::load();
+    let ks = portage::kernel::load(&vdb, &settings.kernel_keep_set);
+    for f in portage::kernel::check(&ks, Some(&scan), settings.kernel_protect, 2, settings.nvidia_alerts) {
+        println!("[{:?}] {}\n    {}{}", f.severity, f.title, f.detail, if f.fixes.is_empty() { String::new() } else { format!("\n    fixes: {:?}", f.fixes) });
+    }
+}
+
 fn main() -> eframe::Result {
     if std::env::args().any(|a| a == "--self-test") {
         self_test();
+        return Ok(());
+    }
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--boot-check") {
+        boot_check_cli(args.get(i + 1).map(|s| s.as_str()).unwrap_or(""));
         return Ok(());
     }
     let options = eframe::NativeOptions {

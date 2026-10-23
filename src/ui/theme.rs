@@ -97,6 +97,18 @@ pub fn install_fonts(ctx: &egui::Context, family_override: Option<&str>) {
         fonts.families.insert(FontFamily::Name(name.into()), stack);
     }
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+    // Noto Sans has no arrows/box symbols (U+2190…); fall back to a font that does.
+    if let Some(b) = load_font(
+        &["/usr/share/fonts/liberation-fonts/LiberationSans-Regular.ttf", "/usr/share/fonts/dejavu/DejaVuSans.ttf", "/usr/share/fonts/noto/NotoSansMono-Regular.ttf"],
+        "sans-serif:charset=2192",
+    ) {
+        fonts.font_data.insert("ui-symbols".into(), Arc::new(FontData::from_owned(b)));
+        for fam in [FontFamily::Proportional, FontFamily::Name("bold".into()), FontFamily::Name("medium".into()), FontFamily::Name("light".into())] {
+            if let Some(st) = fonts.families.get_mut(&fam) {
+                st.push("ui-symbols".into());
+            }
+        }
+    }
     // Icons inside bold/medium text too.
     for name in ["bold", "medium", "light"] {
         if let Some(st) = fonts.families.get_mut(&FontFamily::Name(name.into()))
