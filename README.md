@@ -5,6 +5,32 @@ Everything you would do with `emerge`, `eselect repository` and the files in
 `/etc/portage` is available as buttons, switches and menus — with plain-language
 explanations for newcomers and every expert option still within reach.
 
+## Quick start
+
+From the bundled overlay (`dist/gentoo`, needs Rust ≥ 1.95; Portage can only fetch
+the release tarball once the GitHub repository is public):
+
+```sh
+sudo cp -r dist/gentoo /var/db/repos/portagehub
+printf '[portagehub]\nlocation = /var/db/repos/portagehub\n' | sudo tee /etc/portage/repos.conf/portagehub.conf
+sudo ebuild /var/db/repos/portagehub/app-portage/portagehub/portagehub-0.4.0.ebuild manifest
+sudo emerge --ask app-portage/portagehub
+```
+
+Or build it yourself:
+
+```sh
+cargo build --release
+sudo dist/install.sh      # binaries, polkit policy, menu entry
+portagehub
+```
+
+Add yourself to the `portage` group (`sudo usermod -aG portage $USER`, then log in
+again) so history and live build logs are readable. The first privileged action asks
+for your password through polkit. Every change PortageHub makes as root is logged and
+can be undone from **History → PortageHub changes**. The [security model](SECURITY.md)
+explains how the root helper is protected.
+
 ## Screenshots
 
 | | |
@@ -90,10 +116,13 @@ explanations for newcomers and every expert option still within reach.
   packages, dead or no-longer-needed /etc/portage lines, preserved libraries and read
   news.
 - **History** — every merge, failure, removal and emerge command from `emerge.log`,
-  compile-time totals and a per-day chart.
+  compile-time totals and a per-day chart. **PortageHub changes** lists everything
+  done as root, from the audit log: file changes can be undone, and a batch whose
+  step failed was rolled back as a whole.
 
-Every write to `/etc/portage` is shown as a diff first (can be turned off) and written
-atomically; new entries go to a dedicated `zz-portagehub` file in each directory.
+Every write to `/etc/portage` is shown as a diff first (can be turned off), written
+atomically and can be undone; new entries go to a dedicated `zz-portagehub` file in
+each directory.
 
 ## Build and run
 
@@ -108,20 +137,27 @@ Your user should be in the `portage` group so the history and live build logs ar
 ### Administrator rights
 
 Browsing and previews run as your user. The first action that needs root starts
-`portagehub-helper` through **pkexec** (polkit asks for your password once per session).
-The helper only runs Portage tools (`emerge`, `emaint`, `eselect`, `egencache`, …),
-writes only below `/etc/portage`, and otherwise only performs a few operations whose
-arguments it checks itself: accepting or discarding `._cfg` config updates below `/etc`,
-a read-only boot scan, grub-mkconfig/lilo/bootctl/dracut with fixed arguments, remounting
-only /boot, /boot/efi or /efi read-write/read-only, recording
-known-good kernels in `/var/lib/kernel-fallback` (or `/var/lib/portagehub/kernels`), and
-deleting files of kernels that no installed package owns (never the running or a
-known-good kernel). After updating PortageHub, run `sudo dist/install.sh` again — the
-app warns when the installed helper is older than the GUI. If you close PortageHub during an emerge, the helper keeps it
-running until it finishes.
+`portagehub-helper` through **pkexec**. polkit asks for your password each time the
+helper starts, which is once per PortageHub session. The helper talks only to the
+PortageHub process that started it, over a private socket. It only runs Portage tools
+(`emerge`, `emaint`, `eselect`, `egencache`, …) with checked arguments, and writes only
+below `/etc/portage`, plus a few operations of fixed shape:
 
-To install system-wide (adds the polkit policy so the prompt shows a proper message and
-is remembered briefly):
+- `._cfg` config updates below `/etc`;
+- known-good kernel records and their /boot backup;
+- remounting /boot, /boot/efi or /efi;
+- removing files of uninstalled kernels and leftover build directories.
+
+Every change is saved in a journal (`/var/lib/portagehub/journal`) so it can be
+undone, and every request goes to `/var/log/portagehub/audit.log`. See
+[SECURITY.md](SECURITY.md) for the details and the threat model.
+
+After updating PortageHub, run `sudo dist/install.sh` again (or re-emerge). The app
+warns when the installed helper is older than the GUI. If you close PortageHub during
+an emerge, the helper keeps it running until it finishes.
+
+To install system-wide by hand (adds the polkit policy so the prompt shows a proper
+message):
 
 ```sh
 cargo build --release
@@ -136,17 +172,37 @@ sudo dist/install.sh
 | `PORTAGEHUB_HELPER` | Absolute path of the helper binary to use instead of the one next to the GUI or in `/usr/libexec`. |
 | `PORTAGEHUB_DEMO=1` | Replays a synthetic parallel emerge to try the progress view without building anything. |
 | `PORTAGEHUB_SCRIPT` | UI automation for screenshots, e.g. `tab=library;open=app-editors/vim;dtab=use;wait=2;shot=/tmp/vim.png;exit`. |
+| `PORTAGEHUB_ROOT` | Testing: a scratch tree the helper (and the change log) use instead of `/`. Ignored when running as root. |
+| `PORTAGEHUB_STRICT_PEER=1` | Testing: apply the root-only peer check to an unprivileged helper too. |
 
 `portagehub --self-test` prints what was read from your system (repositories, tree,
 installed packages, history, masks, configuration, update estimate) without opening a window.
 
-## Tests
+## Tests and checks
 
 ```sh
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
 Unit tests cover PMS version ordering, atoms, dependency strings, repos.conf,
-make.conf, `package.*` parsing and editing, the pretend-output parser, progress tracking
-and emerge.log parsing; the integration test drives the real helper binary over its
-protocol.
+make.conf, `package.*` parsing and editing, the pretend-output parser, progress
+tracking, emerge.log parsing, the policy checks, the symlink-safe file layer, the
+journal, and the job/batch state machines. The integration tests drive the real
+helper over a socketpair in a scratch root. They cover symlink escapes, byte-for-byte
+rollback, undo, the kernel and cleanup operations, the peer check, and the blocked
+`/proc/<pid>/fd` reopen. Tests that run `emerge` skip themselves where Portage is
+missing (or with `SKIP_EMERGE_TESTS=1`). CI runs everything on Ubuntu and in a Gentoo
+stage3 with the Portage tree.
+
+## Packaging
+
+`dist/gentoo` is a small overlay with a live (`9999`) and a release ebuild
+(`cargo.eclass`; the helper goes to `/usr/libexec`). For a new release, update the
+version and run `python3 dist/gentoo/update-ebuild.py <ebuild>` to regenerate `CRATES`
+and the crate licenses from `Cargo.lock`.
+
+## License
+
+GPL-2.0-or-later — see [LICENSE](LICENSE).

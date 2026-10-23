@@ -13,6 +13,16 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
+/// Tests that run the real emerge: skipped where Portage is not installed
+/// (CI on other distributions) or when SKIP_EMERGE_TESTS=1 (ebuild sandbox).
+fn have_emerge() -> bool {
+    let ok = std::env::var_os("SKIP_EMERGE_TESTS").is_none_or(|v| v != "1") && portagehub::server::resolve_program("emerge").is_some();
+    if !ok {
+        eprintln!("emerge not available: skipping the parts that run it");
+    }
+    ok
+}
+
 struct Helper {
     child: std::process::Child,
     stdin: UnixStream,
@@ -97,11 +107,13 @@ fn protocol_roundtrip() {
     h.until(|e| matches!(e, Event::Ok { id: 1 }), 10);
 
     // Allowed program, streamed output, exit code.
-    h.send(2, Op::Run { argv: vec!["emerge".into(), "--version".into()], env: vec![], cwd: None });
-    let evs = h.until(|e| matches!(e, Event::Exit { id: 2, .. }), 60);
-    assert!(evs.iter().any(|e| matches!(e, Event::Started { id: 2, .. })));
-    assert!(evs.iter().any(|e| matches!(e, Event::Line { id: 2, text, .. } if text.contains("Portage"))), "{evs:?}");
-    assert!(evs.iter().any(|e| matches!(e, Event::Exit { id: 2, code: Some(0), .. })));
+    if have_emerge() {
+        h.send(2, Op::Run { argv: vec!["emerge".into(), "--version".into()], env: vec![], cwd: None });
+        let evs = h.until(|e| matches!(e, Event::Exit { id: 2, .. }), 60);
+        assert!(evs.iter().any(|e| matches!(e, Event::Started { id: 2, .. })));
+        assert!(evs.iter().any(|e| matches!(e, Event::Line { id: 2, text, .. } if text.contains("Portage"))), "{evs:?}");
+        assert!(evs.iter().any(|e| matches!(e, Event::Exit { id: 2, code: Some(0), .. })));
+    }
 
     // Disallowed program.
     h.send(3, Op::Run { argv: vec!["rm".into(), "-rf".into(), "/tmp/nothing".into()], env: vec![], cwd: None });
@@ -131,6 +143,9 @@ fn protocol_roundtrip() {
 
 #[test]
 fn cancel_running_job() {
+    if !have_emerge() {
+        return;
+    }
     let mut h = Helper::start();
     h.until(|e| matches!(e, Event::Ready { .. }), 10);
     // A slow, read-only dependency calculation.

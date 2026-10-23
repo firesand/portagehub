@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>edohikmahtiar@me.com</email>
+		<name>edo</name>
+	</maintainer>
+	<longdescription>
+		PortageHub is a graphical front end for Portage: browsing and searching
+		packages, USE flags, keywords and masks as switches, every emerge option,
+		previews with conflict handling, live build progress, overlays, the
+		/etc/portage files, kernels and boot checks, cleanup and history.
+		Privileged actions run through a small polkit-started helper that keeps
+		an audit log and lets every configuration change be undone.
+	</longdescription>
+	<upstream>
+		<remote-id type="github">firesand/portagehub</remote-id>
+	</upstream>
+</pkgmetadata>

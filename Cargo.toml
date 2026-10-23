@@ -4,6 +4,9 @@ license = "GPL-2.0-or-later"
 name = "portagehub"
 version = "0.4.0"
 edition = "2024"
+rust-version = "1.95"
+repository = "https://github.com/firesand/portagehub"
+readme = "README.md"
 
 [dependencies]
 chrono = "0.4.45"

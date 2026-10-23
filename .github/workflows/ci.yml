@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: fmt, clippy, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      # Parts that run emerge skip themselves here (no Portage on Ubuntu).
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+
+  gentoo:
+    name: tests on Gentoo (real Portage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # gentoo/portage carries the ::gentoo tree as a volume; tests run as an
+      # unprivileged user, like PortageHub itself (as root the helper ignores
+      # the scratch root the file-operation tests use).
+      - name: cargo test in a Gentoo stage3
+        run: |
+          docker create -v /var/db/repos/gentoo --name portage gentoo/portage:latest /bin/true
+          docker run --rm --volumes-from portage -v "$PWD:/src:ro" gentoo/stage3:latest bash -euxc '
+            useradd -m -G portage ci
+            cp -r /src /home/ci/src
+            chown -R ci:ci /home/ci/src
+            su ci -c "
+              set -eux
+              wget -qO- https://sh.rustup.rs | sh -s -- -y --profile minimal
+              . ~/.cargo/env
+              cd ~/src
+              cargo test --locked
+            "
+          '

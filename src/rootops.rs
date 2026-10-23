@@ -235,29 +235,30 @@ pub fn kernel_owners(root: &Path, kver: &str) -> Vec<String> {
     owners
 }
 
-/// Remove a no-longer-installed kernel's files (or only its `.old` copies).
-pub fn remove_kernel_leftovers(root: &Path, kver: &str, old_only: bool, log: &dyn Fn(String)) -> Result<(), String> {
-    if !valid_kver(kver) {
-        return Err(format!("invalid kernel version {kver}"));
-    }
+/// Delete `/boot/<name>` for each name that exists as a file or link; returns how many.
+fn remove_boot_files(root: &Path, names: &[String], log: &dyn Fn(String)) -> Result<usize, String> {
+    let Ok(boot) = Beneath::open(&at(root, "/boot")) else { return Ok(0) };
     let mut removed = 0;
-    let prefixes = ["vmlinuz", "kernel", "bzImage", "initramfs", "initrd", "System.map", "config"];
-    let boot = Beneath::open(&at(root, "/boot")).map_err(io_err("/boot"))?;
-    let mut remove_boot_file = |name: String| -> Result<(), String> {
-        let rel = Path::new(&name);
+    for name in names {
+        let rel = Path::new(name);
         if boot.exists(rel).unwrap_or(false) && !boot.is_dir(rel).unwrap_or(true) {
             boot.unlink(rel).map_err(io_err(format!("/boot/{name}")))?;
             log(format!("removed /boot/{name}"));
             removed += 1;
         }
-        Ok(())
-    };
+    }
+    Ok(removed)
+}
+
+/// Remove a no-longer-installed kernel's files (or only its `.old` copies).
+pub fn remove_kernel_leftovers(root: &Path, kver: &str, old_only: bool, log: &dyn Fn(String)) -> Result<(), String> {
+    if !valid_kver(kver) {
+        return Err(format!("invalid kernel version {kver}"));
+    }
+    let prefixes = ["vmlinuz", "kernel", "bzImage", "initramfs", "initrd", "System.map", "config"];
+    let names = |suffixes: &[&str]| -> Vec<String> { prefixes.iter().flat_map(|p| suffixes.iter().map(move |s| format!("{p}-{kver}{s}"))).collect() };
     if old_only {
-        for p in prefixes {
-            for suf in [".old", ".img.old"] {
-                remove_boot_file(format!("{p}-{kver}{suf}"))?;
-            }
-        }
+        let removed = remove_boot_files(root, &names(&[".old", ".img.old"]), log)?;
         return if removed == 0 { Err("nothing to remove".into()) } else { Ok(()) };
     }
     let running = read_trim(Path::new("/proc/sys/kernel/osrelease"));
@@ -278,11 +279,7 @@ pub fn remove_kernel_leftovers(root: &Path, kver: &str, old_only: bool, log: &dy
     if !owners.is_empty() {
         return Err(format!("still owned by {} — remove the package with depclean first", owners.join(", ")));
     }
-    for p in prefixes {
-        for suf in ["", ".img", ".old", ".img.old"] {
-            remove_boot_file(format!("{p}-{kver}{suf}"))?;
-        }
-    }
+    let mut removed = remove_boot_files(root, &names(&["", ".img", ".old", ".img.old"]), log)?;
     for (parent, name) in [("/lib/modules", kver.to_string()), ("/usr/src", format!("linux-{kver}"))] {
         let Ok(b) = Beneath::open(&at(root, parent)) else { continue };
         if b.is_dir(Path::new(&name)).unwrap_or(false) {
