@@ -9,6 +9,7 @@ pub mod history;
 pub mod makeconf;
 pub mod metadata;
 pub mod pretend;
+pub mod profile;
 pub mod progress;
 pub mod repos;
 pub mod system;

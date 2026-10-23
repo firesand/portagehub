@@ -53,7 +53,13 @@ fn self_test() {
     println!("make.conf: {} assignments, MAKEOPTS={}", mc.assignments.len(), mc.value("MAKEOPTS"));
     let env = portage::system::load_env();
     println!("env: ARCH={} portage={} testing={}", env.arch(), env.portage_version, env.accepts_testing());
+    let masks = portage::profile::load(&repos);
+    println!("masks: {} entries, profile chain:", masks.len());
+    for p in &masks.chain {
+        println!("  {}", p.display());
+    }
     let data = data::Data {
+        masks: Some(masks.into()),
         repos: Some(repos.into()),
         catalog: Some(cat.into()),
         vdb: Some(vdb.into()),
@@ -69,7 +75,7 @@ fn self_test() {
     let t = std::time::Instant::now();
     let u = data::compute_updates(&data);
     println!("updates: {} ({:?})", u.len(), t.elapsed());
-    for c in u.iter().take(10) {
+    for c in u.iter() {
         println!("  {} {} -> {} ::{}", c.key, c.installed, c.available, c.repo);
     }
 }

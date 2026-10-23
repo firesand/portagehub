@@ -78,7 +78,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 "Helper binary: {}",
                 app.exec.helper_path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "not found".into())
             )));
-            ui.label(w::dim("The helper only runs Portage tools (emerge, emaint, eselect, …) and only writes below /etc/portage."));
+            ui.label(w::dim("The helper only runs Portage tools (emerge, emaint, eselect, …), writes files only below /etc/portage, and otherwise only accepts or discards ._cfgXXXX_ configuration updates below /etc."));
             ui.horizontal(|ui| {
                 if !app.exec.root_ready() && w::primary(ui, icon::LOCK_OPEN, "Start admin session now").clicked() {
                     app.push(Action::StartHelper);

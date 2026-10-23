@@ -74,9 +74,10 @@ impl Item {
         }
     }
 
-    pub fn build_dir_log(&self) -> Option<std::path::PathBuf> {
+    /// `$PORTAGE_TMPDIR/portage/<cat>/<pf>/temp/build.log`
+    pub fn build_dir_log(&self, tmpdir: &std::path::Path) -> Option<std::path::PathBuf> {
         let (cat, pn, ver) = split_cpv(&self.cpv)?;
-        Some(std::path::PathBuf::from(format!("/var/tmp/portage/{cat}/{pn}-{ver}/temp/build.log")))
+        Some(tmpdir.join("portage").join(cat).join(format!("{pn}-{ver}")).join("temp/build.log"))
     }
 }
 

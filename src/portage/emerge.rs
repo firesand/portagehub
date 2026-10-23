@@ -108,7 +108,7 @@ pub const SPECS: &[Spec] = &[
     sw("--verbose-conflicts", None, "Verbose conflicts", "Show every package involved in a slot conflict, not only a summary.", Group::Resolver, false),
     sw("--tree", Some('t'), "Show dependency tree", "Print the plan as a tree so you can see what pulls in what.", Group::Resolver, false),
     // Autounmask
-    yn("--autounmask", "Suggest unmask changes", "When something is masked or needs USE changes, let emerge suggest the configuration changes (default: yes).", Group::Autounmask, false),
+    yn("--autounmask", "Suggest unmask changes", "Let emerge suggest keyword and mask changes when the only candidates are masked. emerge's default is no, except that USE and license suggestions (below) default to yes.", Group::Autounmask, false),
     yn("--autounmask-use", "Suggest USE changes", "Allow USE changes in suggestions.", Group::Autounmask, true),
     yn("--autounmask-license", "Suggest license changes", "Allow license changes in suggestions.", Group::Autounmask, true),
     yn("--autounmask-keep-keywords", "Never suggest keywords", "Do not suggest accepting testing keywords.", Group::Autounmask, true),

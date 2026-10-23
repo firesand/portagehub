@@ -511,8 +511,19 @@ fn versions(app: &mut App, ui: &mut Ui, d: &PkgDetail) {
         by_slot.entry(v.meta.slot().split('/').next().unwrap_or("0").to_string()).or_default().push(v);
     }
     let slot_desc: BTreeMap<String, String> = d.xml.slots.iter().cloned().collect();
-    for (slot, list) in by_slot.iter().rev() {
+    let mut slots: Vec<(&String, &Vec<&VersionInfo>)> = by_slot.iter().collect();
+    // Newest slot first, comparing slots like versions ("17" > "9.5.0").
+    slots.sort_by(|a, b| {
+        let va = crate::portage::version::Version::parse(a.0);
+        let vb = crate::portage::version::Version::parse(b.0);
+        match (va, vb) {
+            (Some(x), Some(y)) => y.cmp(&x),
+            _ => b.0.cmp(a.0),
+        }
+    });
+    for (slot, list) in slots {
         w::section(ui, &format!("Slot {slot}{}", slot_desc.get(slot).map(|s| format!(" — {s}")).unwrap_or_default()));
+        let mut shown_reason: Option<Vec<String>> = None;
         for v in list {
             let row = w::card().inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -526,6 +537,11 @@ fn versions(app: &mut App, ui: &mut Ui, d: &PkgDetail) {
                     }
                     if v.user_masked && !v.user_unmasked {
                         w::status_badge(ui, "MASKED").on_hover_text("Masked by your package.mask");
+                    } else if let Some((src, reason)) = &v.profile_mask
+                        && !v.user_unmasked
+                    {
+                        let why = if reason.is_empty() { String::new() } else { format!("\n\n{}", reason.join("\n")) };
+                        w::status_badge(ui, "MASKED").on_hover_text(format!("Masked by {}{why}", src.display()));
                     }
                     if v.user_unmasked {
                         w::badge(ui, "UNMASKED", WHITE, Color32::from_rgb(0x2a, 0x6f, 0x97));
@@ -543,6 +559,14 @@ fn versions(app: &mut App, ui: &mut Ui, d: &PkgDetail) {
                 });
             });
             let resp = row.response.interact(Sense::click());
+            if let Some((src, reason)) = &v.profile_mask
+                && !v.user_unmasked
+                && !reason.is_empty()
+                && shown_reason.as_ref() != Some(reason)
+            {
+                w::callout(ui, ORANGE, icon::PROHIBIT, &format!("{}\n— {}", reason.join(" "), src.display()));
+                shown_reason = Some(reason.clone());
+            }
             let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
             egui::Popup::menu(&resp).show(|ui| {
                 ui.set_min_width(300.0);

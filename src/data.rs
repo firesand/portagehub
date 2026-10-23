@@ -6,6 +6,7 @@ use crate::portage::config::{ConfKind, PortageConfig};
 use crate::portage::history::History;
 use crate::portage::makeconf::MakeConf;
 use crate::portage::metadata::{self, EbuildMeta, PkgXml};
+use crate::portage::profile::MaskDb;
 use crate::portage::repos::{RemoteRepo, ReposConf};
 use crate::portage::system::{Env, NewsItem, Profile};
 use crate::portage::useflags::UseDescDb;
@@ -29,6 +30,7 @@ pub struct Data {
     pub profiles: Option<Arc<Vec<Profile>>>,
     pub news: Option<Arc<Vec<NewsItem>>>,
     pub updates: Option<Arc<Vec<UpdateCandidate>>>,
+    pub masks: Option<Arc<MaskDb>>,
 }
 
 impl Data {
@@ -60,6 +62,7 @@ pub enum Reload {
     Profiles,
     News,
     Updates,
+    Masks,
 }
 
 pub enum DataMsg {
@@ -75,6 +78,7 @@ pub enum DataMsg {
     Profiles(Arc<Vec<Profile>>),
     News(Arc<Vec<NewsItem>>),
     Updates(Arc<Vec<UpdateCandidate>>),
+    Masks(Arc<MaskDb>),
     Detail(String, Arc<PkgDetail>),
     Ebuild(PathBuf, Arc<String>),
 }
@@ -124,6 +128,8 @@ pub struct VersionInfo {
     pub user_unmasked: bool,
     pub user_keyworded: bool,
     pub installed: bool,
+    /// Masked by a repository or profile package.mask: (file, reason lines).
+    pub profile_mask: Option<(PathBuf, Vec<String>)>,
 }
 
 impl VersionInfo {
@@ -132,8 +138,12 @@ impl VersionInfo {
     }
 
     /// Local estimate (profile masks are not evaluated).
+    pub fn masked(&self) -> bool {
+        (self.user_masked || self.profile_mask.is_some()) && !self.user_unmasked
+    }
+
     pub fn visible(&self, accepts_testing: bool) -> bool {
-        if self.user_masked && !self.user_unmasked {
+        if self.masked() {
             return false;
         }
         match self.kw {
@@ -181,6 +191,42 @@ fn user_flags(cfg: Option<&PortageConfig>, kind: ConfKind, cat: &str, pn: &str, 
     })
 }
 
+/// Keyword tokens the user's package.accept_keywords (and legacy package.keywords)
+/// grant this version. An entry without tokens means "~arch".
+fn user_keywords(cfg: Option<&PortageConfig>, cat: &str, pn: &str, ver: &Version, slot: &str, repo: &str, arch: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(cfg) = cfg else { return out };
+    for kind in [ConfKind::AcceptKeywords, ConfKind::Keywords] {
+        let Some(set) = cfg.set(kind) else { continue };
+        for f in set.files.iter().filter(|f| !f.ignored) {
+            for (_, e) in f.entries() {
+                if e.disabled || !e.atom.as_ref().is_some_and(|a| a.matches(cat, pn, ver, Some(slot), Some(repo))) {
+                    continue;
+                }
+                if e.values.is_empty() {
+                    out.push(format!("~{arch}"));
+                } else {
+                    out.extend(e.values.iter().cloned());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Do the granted tokens make a version with this keyword state acceptable?
+pub fn keywords_accept(kw: KwState, accepted: &[String], arch: &str) -> bool {
+    if accepted.iter().any(|k| k == "**") {
+        return true;
+    }
+    match kw {
+        KwState::Stable => true,
+        KwState::Testing => accepted.iter().any(|k| *k == format!("~{arch}") || k == "~*"),
+        KwState::Missing => false,
+        KwState::Broken => accepted.iter().any(|k| k == "-*" || *k == format!("-{arch}")),
+    }
+}
+
 pub fn build_detail(key: &str, data: &Data) -> Option<PkgDetail> {
     let catalog = data.catalog.as_ref()?;
     let pkg = catalog.get(key)?;
@@ -198,9 +244,15 @@ pub fn build_detail(key: &str, data: &Data) -> Option<PkgDetail> {
         let kw = kw_state(&meta.keywords(), &arch);
         let slot = meta.slot().to_string();
         let ver = e.ver.clone();
-        let keyworded = user_flags(cfg, ConfKind::AcceptKeywords, &pkg.cat, &pkg.pn, &ver, &slot, &e.repo)
-            || user_flags(cfg, ConfKind::Keywords, &pkg.cat, &pkg.pn, &ver, &slot, &e.repo);
+        let accepted = user_keywords(cfg, &pkg.cat, &pkg.pn, &ver, &slot, &e.repo, &arch);
+        let keyworded = keywords_accept(kw, &accepted, &arch);
+        let profile_mask = data
+            .masks
+            .as_ref()
+            .and_then(|m| m.masked(&pkg.cat, &pkg.pn, &ver, Some(&slot), Some(&e.repo)))
+            .map(|m| (m.source.clone(), m.reason.clone()));
         versions.push(VersionInfo {
+            profile_mask,
             ebuild_path: metadata::ebuild_path(loc, &pkg.cat, &pkg.pn, &e.ver.raw),
             user_masked: user_flags(cfg, ConfKind::Mask, &pkg.cat, &pkg.pn, &ver, &slot, &e.repo),
             user_unmasked: user_flags(cfg, ConfKind::Unmask, &pkg.cat, &pkg.pn, &ver, &slot, &e.repo),
@@ -309,4 +361,20 @@ pub fn reverse_deps(vdb: &Vdb, key: &str) -> Vec<(String, String)> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keyword_acceptance() {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert!(keywords_accept(KwState::Testing, &s(&["~amd64"]), "amd64"));
+        assert!(!keywords_accept(KwState::Missing, &s(&["~amd64"]), "amd64"));
+        assert!(keywords_accept(KwState::Missing, &s(&["**"]), "amd64"));
+        assert!(keywords_accept(KwState::Testing, &s(&["~*"]), "amd64"));
+        assert!(!keywords_accept(KwState::Testing, &s(&[]), "amd64"));
+        assert!(keywords_accept(KwState::Stable, &s(&[]), "amd64"));
+    }
 }

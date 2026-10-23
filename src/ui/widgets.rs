@@ -202,9 +202,9 @@ pub fn badge(ui: &mut Ui, text: &str, fg: Color32, bg: Color32) -> Response {
 pub fn status_badge(ui: &mut Ui, label: &str) -> Response {
     let (fg, bg) = match label {
         "NEW" | "INSTALLED" | "STABLE" | "DONE" => (GREEN_TEXT, GREEN_DARK),
-        "UPDATE" | "NEW SLOT" | "BUILDING" | "BINARY" => (WHITE, Color32::from_rgb(0x1f, 0x5f, 0x99)),
+        "UPDATE" | "NEW SLOT" | "BUILDING" | "BINARY" | "INSTALLING" => (WHITE, Color32::from_rgb(0x1f, 0x5f, 0x99)),
         "DOWNGRADE" | "TESTING" | "WARNING" | "MASKED?" => (Color32::from_rgb(0x2b, 0x1a, 0x00), ORANGE),
-        "REBUILD" | "QUEUED" | "LIVE" => (TEXT, Color32::from_rgb(0x3a, 0x46, 0x55)),
+        "REBUILD" | "QUEUED" | "LIVE" | "IN TREE" => (TEXT, Color32::from_rgb(0x3a, 0x46, 0x55)),
         "BLOCKED" | "FAILED" | "REMOVE" | "MASKED" | "ERROR" => (WHITE, Color32::from_rgb(0xa3, 0x2e, 0x2e)),
         "BLOCKER" | "WORLD" => (WHITE, Color32::from_rgb(0x6b, 0x4f, 0xa8)),
         _ => (TEXT, Color32::from_rgb(0x3a, 0x46, 0x55)),
@@ -275,7 +275,9 @@ pub fn progress(ui: &mut Ui, fraction: f32, height: f32, text: &str, animate: bo
         }
     }
     if !text.is_empty() {
-        p.text(rect.center(), Align2::CENTER_CENTER, text, FontId::new((height * 0.62).clamp(10.0, 13.0), theme::medium()), WHITE);
+        let font = FontId::new((height * 0.62).clamp(10.0, 13.0), theme::medium());
+        p.text(rect.center() + egui::vec2(1.0, 1.0), Align2::CENTER_CENTER, text, font.clone(), Color32::from_black_alpha(200));
+        p.text(rect.center(), Align2::CENTER_CENTER, text, font, WHITE);
     }
     resp
 }

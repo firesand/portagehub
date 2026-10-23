@@ -203,6 +203,8 @@ pub struct App {
     last_log_poll: Instant,
     fonts_applied: Option<String>,
     script: Option<crate::shot::Script>,
+    confirm_close: bool,
+    allow_close: bool,
 }
 
 impl App {
@@ -245,6 +247,8 @@ impl App {
             settings_view: Default::default(),
             last_log_poll: Instant::now(),
             script: crate::shot::Script::from_env(),
+            confirm_close: false,
+            allow_close: false,
         };
         for r in [Reload::Repos, Reload::Vdb, Reload::History, Reload::Config, Reload::MakeConf, Reload::Env] {
             app.spawn_load(r);
@@ -354,12 +358,16 @@ impl App {
         let tx = self.data_tx.clone();
         let ctx = self.ctx.clone();
         match r {
-            Reload::Catalog | Reload::UseDesc | Reload::News if snapshot.repos.is_none() => {
+            Reload::Catalog | Reload::UseDesc | Reload::News | Reload::Masks if snapshot.repos.is_none() => {
                 self.spawn_load(Reload::Repos);
                 return;
             }
             Reload::Updates
-                if snapshot.catalog.is_none() || snapshot.vdb.is_none() || snapshot.env.is_none() || snapshot.config.is_none() =>
+                if snapshot.catalog.is_none()
+                    || snapshot.vdb.is_none()
+                    || snapshot.env.is_none()
+                    || snapshot.config.is_none()
+                    || snapshot.masks.is_none() =>
             {
                 return;
             }
@@ -400,6 +408,7 @@ impl App {
                     DataMsg::News(Arc::new(all))
                 }
                 Reload::Updates => DataMsg::Updates(Arc::new(data::compute_updates(&snapshot))),
+                Reload::Masks => DataMsg::Masks(Arc::new(crate::portage::profile::load(snapshot.repos.as_ref().unwrap()))),
             };
             let _ = tx.send(msg);
             ctx.request_repaint();
@@ -455,6 +464,7 @@ impl App {
                 self.spawn_load(Reload::Catalog);
                 self.spawn_load(Reload::UseDesc);
                 self.spawn_load(Reload::News);
+                self.spawn_load(Reload::Masks);
             }
             DataMsg::Catalog(c) => {
                 done(self, Reload::Catalog);
@@ -503,6 +513,12 @@ impl App {
             DataMsg::News(n) => {
                 done(self, Reload::News);
                 self.data.news = Some(n);
+            }
+            DataMsg::Masks(m) => {
+                done(self, Reload::Masks);
+                self.data.masks = Some(m);
+                self.invalidate_details();
+                self.spawn_load(Reload::Updates);
             }
             DataMsg::Updates(u) => {
                 done(self, Reload::Updates);
@@ -847,12 +863,48 @@ impl App {
         self.apply(Action::Batch { title, ops, reload, then });
     }
 
+    /// PORTAGE_TMPDIR for a package, honouring package.env overrides (e.g. a "notmpfs" env file).
+    pub fn tmpdir_for(&self, cpv: &str) -> PathBuf {
+        use crate::portage::config::ConfKind;
+        let mut dir = self.data.env.as_ref().map(|e| e.get("PORTAGE_TMPDIR").to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "/var/tmp".into());
+        if let (Some(cfg), Some((c, p, v))) = (self.data.config.as_ref(), crate::portage::atom::split_cpv(cpv))
+            && let Some(set) = cfg.set(ConfKind::Env)
+        {
+            for f in set.files.iter().filter(|f| !f.ignored) {
+                for (_, e) in f.entries() {
+                    if e.disabled || !e.atom.as_ref().is_some_and(|a| a.matches(&c, &p, &v, None, None)) {
+                        continue;
+                    }
+                    for name in &e.values {
+                        if let Some(envf) = cfg.env_files.iter().find(|x| x.name == *name) {
+                            for (k, val, _) in makeconf::scan(&envf.content) {
+                                if k == "PORTAGE_TMPDIR" && !val.is_empty() {
+                                    dir = val;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        PathBuf::from(dir)
+    }
+
     /// Tail build logs of running packages to show their phase.
     fn poll_build_logs(&mut self) {
         if self.last_log_poll.elapsed() < Duration::from_millis(1500) {
             return;
         }
         self.last_log_poll = Instant::now();
+        // Resolve each active package's build dir first (PORTAGE_TMPDIR can differ per package).
+        let mut dirs: HashMap<String, PathBuf> = HashMap::new();
+        for j in self.jobs.iter().filter(|j| j.running()) {
+            if let JobKind::Emerge { tracker, .. } = &j.kind {
+                for i in tracker.items.iter().filter(|i| i.stage.active()) {
+                    dirs.insert(i.cpv.clone(), self.tmpdir_for(&i.cpv));
+                }
+            }
+        }
         for j in self.jobs.iter_mut().filter(|j| j.running()) {
             if let JobKind::Emerge { tracker, .. } = &mut j.kind {
                 let active: Vec<(usize, PathBuf)> = tracker
@@ -860,7 +912,7 @@ impl App {
                     .iter()
                     .enumerate()
                     .filter(|(_, i)| i.stage.active())
-                    .filter_map(|(n, i)| i.build_dir_log().map(|p| (n, p)))
+                    .filter_map(|(n, i)| dirs.get(&i.cpv).and_then(|d| i.build_dir_log(d)).map(|p| (n, p)))
                     .collect();
                 for (n, p) in active {
                     if let Some(t) = progress::tail(&p, 16 * 1024) {
@@ -1016,14 +1068,14 @@ impl App {
                         .shadow(egui::epaint::Shadow { offset: [0, 4], blur: 12, spread: 0, color: Color32::from_black_alpha(120) })
                         .show(ui, |ui| {
                             ui.set_width(360.0);
-                            ui.horizontal(|ui| {
+                            ui.horizontal_top(|ui| {
                                 ui.label(RichText::new(ic).size(18.0).color(col));
-                                ui.add(egui::Label::new(RichText::new(&t.text).color(TEXT)).wrap());
-                                ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                                    if ui.add(egui::Button::new(RichText::new(icon::X).color(TEXT_DIM)).frame(false)).clicked() {
-                                        close = Some(i);
-                                    }
+                                ui.allocate_ui(egui::vec2(300.0, 0.0), |ui| {
+                                    ui.add(egui::Label::new(RichText::new(&t.text).color(TEXT)).wrap());
                                 });
+                                if ui.add(egui::Button::new(RichText::new(icon::X).color(TEXT_DIM)).frame(false)).clicked() {
+                                    close = Some(i);
+                                }
                             });
                         });
                     ui.add_space(6.0);
@@ -1031,6 +1083,43 @@ impl App {
                 if let Some(i) = close {
                     self.toasts.remove(i);
                 }
+            });
+    }
+
+    /// Ask before quitting while an emerge is running.
+    fn close_guard(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close && self.running_emerge().is_some() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.confirm_close = true;
+        }
+        if !self.confirm_close {
+            return;
+        }
+        let in_process = self.exec.is_root;
+        egui::Modal::new(egui::Id::new("close-guard"))
+            .frame(Frame::new().fill(PANEL).corner_radius(CornerRadius::same(6)).inner_margin(Margin::same(18)))
+            .show(ctx, |ui| {
+                ui.set_width(480.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(icon::WARNING).size(22.0).color(ORANGE));
+                    w::title(ui, "An emerge is still running");
+                });
+                ui.add(egui::Label::new(RichText::new(if in_process {
+                    "PortageHub runs as root, so quitting now stops the emerge. You can continue it later with “Resume interrupted emerge”."
+                } else {
+                    "If you quit, the emerge keeps running in the background (the admin helper stays alive until it finishes), but you won't see its progress here. emerge.log and History will still record it."
+                }).color(TEXT)).wrap());
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if w::primary(ui, icon::ARROW_LEFT, "Keep PortageHub open").clicked() {
+                        self.confirm_close = false;
+                    }
+                    if w::danger(ui, icon::SIGN_OUT, "Quit anyway").clicked() {
+                        self.allow_close = true;
+                        self.confirm_close = false;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
             });
     }
 
@@ -1142,6 +1231,7 @@ impl eframe::App for App {
             Tab::Settings => views::settings::show(self, ui),
         });
         self.review_ui(&ctx);
+        self.close_guard(&ctx);
         self.toasts_ui(&ctx);
         self.process_actions();
         if let Some(mut s) = self.script.take() {

@@ -16,6 +16,9 @@ pub enum Step {
     ConfigPage(String),
     Search(String),
     Pretend(String),
+    Root(String),
+    WriteTest,
+    Apply,
     Wait(f32),
     Shot(PathBuf),
     Exit,
@@ -50,6 +53,9 @@ impl Script {
                 "cpage" => Step::ConfigPage(v.to_string()),
                 "search" => Step::Search(v.to_string()),
                 "pretend" => Step::Pretend(v.to_string()),
+                "root" => Step::Root(v.to_string()),
+                "writetest" => Step::WriteTest,
+                "apply" => Step::Apply,
                 "wait" => Step::Wait(v.parse().unwrap_or(1.0)),
                 "shot" => Step::Shot(PathBuf::from(v)),
                 "exit" => Step::Exit,
@@ -136,6 +142,31 @@ pub fn run(app: &mut App, ctx: &egui::Context, script: &mut Script) {
                     Err(_) => crate::portage::emerge::EmergeOptions::default().targets(&[t.as_str()]),
                 };
                 app.push(Action::Pretend(opts));
+            }
+            Step::Root(cmd) => {
+                app.push(Action::Root {
+                    title: cmd.clone(),
+                    argv: cmd.split_whitespace().map(String::from).collect(),
+                    reload: vec![],
+                    kind: crate::app::JobKind::Generic,
+                });
+                app.emerge.page = crate::views::emerge::Page::Activity;
+            }
+            Step::WriteTest => {
+                let path = PathBuf::from(format!("/etc/portage/package.use/{}", app.settings.target_file));
+                let old = std::fs::read_to_string(&path).unwrap_or_default();
+                let new = crate::portage::config::append_line(&old, "# portagehub write test");
+                app.push(Action::Write {
+                    title: "Write test".into(),
+                    changes: vec![crate::app::FileChange { path, old, new: Some(new) }],
+                    reload: vec![crate::data::Reload::Config],
+                    then: None,
+                });
+            }
+            Step::Apply => {
+                if let Some(r) = app.review.take() {
+                    app.apply_changes(r.title, r.changes, r.reload, r.then);
+                }
             }
             Step::Wait(s) => {
                 script.wait_until = Some(Instant::now() + std::time::Duration::from_secs_f32(s));

@@ -1102,7 +1102,7 @@ fn tracker_view(_app: &mut App, ui: &mut Ui, t: &crate::portage::progress::Track
                 let label = match it.stage {
                     Stage::Queued => "QUEUED",
                     Stage::Fetching | Stage::Building => "BUILDING",
-                    Stage::Installing => "UPDATE",
+                    Stage::Installing => "INSTALLING",
                     Stage::Done => "DONE",
                     Stage::Failed => "FAILED",
                     Stage::Skipped => "BLOCKED",
