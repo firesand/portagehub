@@ -8,15 +8,26 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Request {
     pub id: u64,
+    /// Transaction (from [`Op::Begin`]) that file changes of this request belong to.
+    /// Without one, the helper wraps each changing request in its own transaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tx: Option<String>,
     #[serde(flatten)]
     pub op: Op,
+}
+
+impl Request {
+    pub fn new(id: u64, op: Op) -> Request {
+        Request { id, tx: None, op }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
     Ping,
-    /// Spawn a program and stream its output back.
+    /// Spawn a program and stream its output back. Programs always run in `/`
+    /// (`cwd` is accepted for compatibility and ignored).
     Run {
         argv: Vec<String>,
         #[serde(default)]
@@ -83,6 +94,21 @@ pub enum Op {
         target: String,
         rw: bool,
     },
+    /// Start a transaction; its id comes back as [`Event::Data`].
+    Begin {
+        label: String,
+    },
+    /// Close a transaction: its changes stay and can be undone later.
+    Commit {
+        tx: String,
+    },
+    /// Restore every file a transaction changed. For a committed transaction
+    /// this is refused when one of its files was changed since, unless `force`.
+    Rollback {
+        tx: String,
+        #[serde(default)]
+        force: bool,
+    },
 }
 
 /// The only mount points [`Op::Remount`] accepts.
@@ -94,6 +120,7 @@ impl Op {
         match self {
             Op::BootScan | Op::BootAction { .. } | Op::MarkGood { .. } | Op::RemoveKernelLeftovers { .. } | Op::CleanBuildDirs => (0, 2),
             Op::Remount { .. } => (0, 3),
+            Op::Begin { .. } | Op::Commit { .. } | Op::Rollback { .. } => (0, 4),
             _ => (0, 1),
         }
     }
@@ -180,9 +207,10 @@ impl BootScan {
     }
 }
 
-/// Validate a `._cfgNNNN_name` path below /etc and return (update, target).
+/// Validate a `._cfgNNNN_name` path below /etc and return (update, target),
+/// both relative to /etc.
 pub fn config_update_paths(path: &str) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
-    use std::path::{Component, Path, PathBuf};
+    use std::path::{Component, Path};
     let p = Path::new(path);
     if !path.starts_with("/etc/") || p.components().any(|c| matches!(c, Component::ParentDir | Component::CurDir)) {
         return None;
@@ -193,8 +221,9 @@ pub fn config_update_paths(path: &str) -> Option<(std::path::PathBuf, std::path:
     if num.len() != 4 || !num.bytes().all(|b| b.is_ascii_digit()) || target.is_empty() || target.contains('/') {
         return None;
     }
-    let dir = p.parent()?;
-    Some((PathBuf::from(path), dir.join(target)))
+    let rel = p.strip_prefix("/etc").ok()?;
+    let dir = rel.parent()?;
+    Some((rel.to_path_buf(), dir.join(target)))
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -257,7 +286,6 @@ pub const ALLOWED_PROGRAMS: &[&str] = &[
     "eclean",
     "eclean-dist",
     "eclean-pkg",
-    "ebuild",
     "perl-cleaner",
     "smart-live-rebuild",
     "haskell-updater",
@@ -273,22 +301,9 @@ pub const PROGRAM_DIRS: &[&str] = &["/usr/bin", "/usr/sbin", "/bin", "/sbin", "/
 /// Root of the only tree the helper writes into directly.
 pub const WRITE_ROOT: &str = "/etc/portage/";
 
-/// Environment variables the helper refuses to pass on.
-pub fn env_key_allowed(key: &str) -> bool {
-    let valid = !key.is_empty()
-        && key
-            .chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
-    let banned = key.starts_with("LD_")
-        || matches!(
-            key,
-            "PATH" | "IFS" | "BASH_ENV" | "ENV" | "PYTHONPATH" | "PYTHONSTARTUP" | "PYTHONHOME" | "PERL5LIB" | "PERL5OPT"
-        );
-    valid && !banned
-}
-
-/// Normalise a path lexically and check that it stays below [`WRITE_ROOT`].
-pub fn path_allowed(path: &str) -> Option<std::path::PathBuf> {
+/// Normalise a path lexically and return it relative to [`WRITE_ROOT`]
+/// (`/etc/portage/package.use/x` -> `package.use/x`). `..` is refused.
+pub fn portage_rel(path: &str) -> Option<std::path::PathBuf> {
     use std::path::{Component, PathBuf};
     if !path.starts_with('/') {
         return None;
@@ -296,18 +311,13 @@ pub fn path_allowed(path: &str) -> Option<std::path::PathBuf> {
     let mut out = PathBuf::from("/");
     for c in std::path::Path::new(path).components() {
         match c {
-            Component::RootDir => {}
+            Component::RootDir | Component::CurDir => {}
             Component::Normal(p) => out.push(p),
-            Component::CurDir => {}
             Component::ParentDir | Component::Prefix(_) => return None,
         }
     }
-    let s = out.to_string_lossy().to_string();
-    if s.starts_with(WRITE_ROOT) && s.len() > WRITE_ROOT.len() {
-        Some(out)
-    } else {
-        None
-    }
+    let rel = out.strip_prefix(WRITE_ROOT).ok()?;
+    (!rel.as_os_str().is_empty()).then(|| rel.to_path_buf())
 }
 
 #[cfg(test)]
@@ -316,18 +326,23 @@ mod tests {
 
     #[test]
     fn paths() {
-        assert!(path_allowed("/etc/portage/package.use/foo").is_some());
-        assert!(path_allowed("/etc/portage/../shadow").is_none());
-        assert!(path_allowed("/etc/portage").is_none());
-        assert!(path_allowed("/etc/passwd").is_none());
-        assert!(path_allowed("etc/portage/x").is_none());
+        assert_eq!(portage_rel("/etc/portage/package.use/foo").unwrap().to_str(), Some("package.use/foo"));
+        assert_eq!(portage_rel("/etc/portage//./make.conf").unwrap().to_str(), Some("make.conf"));
+        assert!(portage_rel("/etc/portage/../shadow").is_none());
+        assert!(portage_rel("/etc/portage").is_none());
+        assert!(portage_rel("/etc/portage/").is_none());
+        assert!(portage_rel("/etc/portagex/y").is_none());
+        assert!(portage_rel("/etc/passwd").is_none());
+        assert!(portage_rel("etc/portage/x").is_none());
     }
 
     #[test]
     fn cfg_updates() {
         let (a, b) = config_update_paths("/etc/ssh/._cfg0001_sshd_config").unwrap();
-        assert_eq!(a.to_str(), Some("/etc/ssh/._cfg0001_sshd_config"));
-        assert_eq!(b.to_str(), Some("/etc/ssh/sshd_config"));
+        assert_eq!(a.to_str(), Some("ssh/._cfg0001_sshd_config"));
+        assert_eq!(b.to_str(), Some("ssh/sshd_config"));
+        let (a, b) = config_update_paths("/etc/._cfg0000_make.conf").unwrap();
+        assert_eq!((a.to_str(), b.to_str()), (Some("._cfg0000_make.conf"), Some("make.conf")));
         assert!(config_update_paths("/etc/../root/._cfg0001_x").is_none());
         assert!(config_update_paths("/home/u/._cfg0001_x").is_none());
         assert!(config_update_paths("/etc/ssh/sshd_config").is_none());
@@ -345,19 +360,17 @@ mod tests {
     }
 
     #[test]
-    fn env() {
-        assert!(env_key_allowed("FEATURES"));
-        assert!(!env_key_allowed("LD_PRELOAD"));
-        assert!(!env_key_allowed("PATH"));
-        assert!(!env_key_allowed("lower"));
-    }
-
-    #[test]
     fn roundtrip() {
-        let r = Request { id: 7, op: Op::Run { argv: vec!["emerge".into()], env: vec![], cwd: None } };
+        let r = Request::new(7, Op::Run { argv: vec!["emerge".into()], env: vec![], cwd: None });
         let s = serde_json::to_string(&r).unwrap();
+        assert!(!s.contains("\"tx\""), "{s}");
         let back: Request = serde_json::from_str(&s).unwrap();
         assert_eq!(back.id, 7);
+        assert!(back.tx.is_none());
         assert!(matches!(back.op, Op::Run { .. }));
+        let r = Request { id: 8, tx: Some("1-2".into()), op: Op::DeleteFile { path: "/etc/portage/x".into() } };
+        let back: Request = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(back.tx.as_deref(), Some("1-2"));
+        assert_eq!(Op::Begin { label: String::new() }.min_helper(), (0, 4));
     }
 }

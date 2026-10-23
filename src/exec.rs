@@ -1,14 +1,21 @@
 //! Running commands: unprivileged ones directly, privileged ones through the
 //! root helper (one `pkexec` prompt per session), or in-process when the GUI
 //! itself runs as root.
+//!
+//! The helper's stdin/stdout are one end of a socketpair: unlike a pipe, a
+//! socket cannot be reopened by another process of the same user through
+//! `/proc/<pid>/fd`, so nobody else can inject requests into the root session.
 
 use portagehub::protocol::{Event, Op, Request};
 use portagehub::server::{Server, Sink};
 use portagehub::stream::spawn_streaming;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Write};
+use std::net::Shutdown;
+use std::os::fd::OwnedFd;
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
@@ -37,8 +44,16 @@ pub enum ExecMsg {
 }
 
 struct HelperConn {
-    stdin: ChildStdin,
+    sock: UnixStream,
     child: Child,
+}
+
+impl Drop for HelperConn {
+    fn drop(&mut self) {
+        // The reader thread holds a clone of the socket: shut down our
+        // direction so the helper sees end-of-input and exits after its jobs.
+        let _ = self.sock.shutdown(Shutdown::Write);
+    }
 }
 
 pub struct Executor {
@@ -48,7 +63,8 @@ pub struct Executor {
     pub is_root: bool,
     pub helper_state: HelperState,
     helper: Option<HelperConn>,
-    local_root: Server,
+    /// In-process request handler when the GUI itself runs as root.
+    local_root: Option<Server>,
     /// Requests sent to the helper that have not finished yet.
     pending_root: Arc<Mutex<HashSet<u64>>>,
     /// Requests waiting for the helper to start.
@@ -91,7 +107,7 @@ impl Executor {
             is_root,
             helper_state: if is_root { HelperState::Ready } else { HelperState::NotStarted },
             helper: None,
-            local_root: Server::default(),
+            local_root: is_root.then(Server::default),
             pending_root: Arc::default(),
             queued: VecDeque::new(),
             user_pids: Arc::default(),
@@ -142,19 +158,29 @@ impl Executor {
                     }
                 }
             }
-            Priv::Root => self.submit_root(Request { id, op: Op::Run { argv, env, cwd: None } }),
+            Priv::Root => self.submit_root(Request::new(id, Op::Run { argv, env, cwd: None })),
         }
         id
     }
 
     pub fn root_op(&mut self, op: Op) -> u64 {
+        self.root_op_tx(op, None)
+    }
+
+    /// A root operation that belongs to transaction `tx` (from `Op::Begin`).
+    pub fn root_op_tx(&mut self, op: Op, tx: Option<String>) -> u64 {
         let id = self.alloc_id();
-        self.submit_root(Request { id, op });
+        self.submit_root(Request { id, tx, op });
         id
     }
 
     pub fn root_op_with_id(&mut self, id: u64, op: Op) {
-        self.submit_root(Request { id, op });
+        self.submit_root(Request::new(id, op));
+    }
+
+    /// Does the running helper understand `op`?
+    pub fn supports(&self, op: &Op) -> bool {
+        self.is_root || op.min_helper() <= self.helper_version
     }
 
     pub fn cancel(&mut self, id: u64, privilege: Priv, signal: i32) {
@@ -168,14 +194,14 @@ impl Executor {
             }
             Priv::Root => {
                 let sid = self.alloc_id();
-                self.submit_root(Request { id: sid, op: Op::Signal { target: id, signal } });
+                self.submit_root(Request::new(sid, Op::Signal { target: id, signal }));
             }
         }
     }
 
     fn submit_root(&mut self, req: Request) {
-        if self.is_root {
-            self.local_root.handle(req, self.sink());
+        if let Some(server) = &self.local_root {
+            server.handle(req, self.sink());
             return;
         }
         match &self.helper_state {
@@ -199,7 +225,7 @@ impl Executor {
         }
         let line = serde_json::to_string(&req).unwrap_or_default();
         let ok = match self.helper.as_mut() {
-            Some(h) => writeln!(h.stdin, "{line}").and_then(|_| h.stdin.flush()).is_ok(),
+            Some(h) => writeln!(h.sock, "{line}").and_then(|_| h.sock.flush()).is_ok(),
             None => false,
         };
         if ok {
@@ -227,11 +253,24 @@ impl Executor {
             c.args(parts).arg(&path);
             c
         };
-        let spawn = cmd
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn();
+        let (sock, child_end) = match UnixStream::pair() {
+            Ok(p) => p,
+            Err(e) => {
+                self.fail_queued(format!("could not create the helper socket: {e}"));
+                return;
+            }
+        };
+        let child_in = match child_end.try_clone() {
+            Ok(c) => c,
+            Err(e) => {
+                self.fail_queued(format!("could not create the helper socket: {e}"));
+                return;
+            }
+        };
+        cmd.stdin(Stdio::from(OwnedFd::from(child_in))).stdout(Stdio::from(OwnedFd::from(child_end))).stderr(Stdio::piped());
+        let spawn = cmd.spawn();
+        // Close our copies of the child's end, so the reader sees EOF when the helper exits.
+        drop(cmd);
         let mut child = match spawn {
             Ok(c) => c,
             Err(e) => {
@@ -239,8 +278,14 @@ impl Executor {
                 return;
             }
         };
-        let stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
+        let stdout = match sock.try_clone() {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = child.kill();
+                self.fail_queued(format!("could not create the helper socket: {e}"));
+                return;
+            }
+        };
         let stderr = child.stderr.take().unwrap();
         let tx = self.tx.clone();
         let ctx = self.ctx.clone();
@@ -284,7 +329,7 @@ impl Executor {
             let _ = tx.send(ExecMsg::HelperGone(if reason.is_empty() { "authentication cancelled or helper exited".into() } else { reason }));
             ctx.request_repaint();
         });
-        self.helper = Some(HelperConn { stdin, child });
+        self.helper = Some(HelperConn { sock, child });
     }
 
     fn fail_queued(&mut self, msg: String) {

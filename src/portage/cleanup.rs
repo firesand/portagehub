@@ -85,7 +85,7 @@ pub fn scan(vdb: &Vdb, catalog: &Catalog, cfg: &PortageConfig, arch: &str, log_d
     if !log_dir.is_empty() {
         l.logs = log_stats(Path::new(log_dir), log_days);
     }
-    for d in portagehub::rootops::build_dirs() {
+    for d in portagehub::rootops::build_dirs(Path::new("/")) {
         let size = dir_size(&d, 0);
         l.build_dirs.push((d, size));
     }

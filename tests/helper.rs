@@ -35,7 +35,7 @@ impl Helper {
     }
 
     fn send(&mut self, id: u64, op: Op) {
-        let s = serde_json::to_string(&Request { id, op }).unwrap();
+        let s = serde_json::to_string(&Request::new(id, op)).unwrap();
         writeln!(self.stdin, "{s}").unwrap();
         self.stdin.flush().unwrap();
     }
