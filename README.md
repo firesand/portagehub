@@ -55,6 +55,25 @@ explanations for newcomers and every expert option still within reach.
   `/etc/portage/env` files with templates, profile switching, news, `._cfg` config
   updates with diffs, and a **stray-file detector** for files Portage silently ignores
   (e.g. `package.accept_keywordschatgpt-desktop`), which it can merge into the right place.
+- **Maintenance → Kernels & Boot** — every installed kernel mapped to its package,
+  /boot image, initramfs, /lib/modules and /usr/src tree, with RUNNING / LAST-GOOD /
+  PREVIOUS-GOOD / NEWEST tags. A boot check reads the root-only bootloader files
+  through the helper (GRUB, systemd-boot, LILO; rEFInd/Limine/EFI stub detected) and
+  reports kernels missing from the menu, stale entries, missing initramfs or modules,
+  a LILO that was not re-run, and offers the fix (grub-mkconfig, lilo, bootctl update,
+  dracut, emerge --config). **Known-good rules**: mark the running kernel known-good
+  (optionally only after nvidia-smi works), keep a backup in /boot/kernel-backup, and
+  protect the last two known-good kernels from depclean through a set in @world
+  (compatible with /var/lib/kernel-fallback and @kernels-keep). Old-kernel cleanup never
+  touches the running or known-good kernels and can refuse until the newest kernel is
+  marked. **NVIDIA**: checks that every kernel has an nvidia.ko matching the installed
+  driver and alerts after kernel or driver updates, with the right rebuild option for
+  dist-kernel and non-dist-kernel setups.
+- **Maintenance → Cleanup** — unused packages (depclean scan with Keep/Remove per
+  package), old kernels and /boot leftovers, distfiles and binary packages (eclean),
+  old build logs, failed build directories, world-file entries for uninstalled
+  packages, dead or no-longer-needed /etc/portage lines, preserved libraries and read
+  news.
 - **History** — every merge, failure, removal and emerge command from `emerge.log`,
   compile-time totals and a per-day chart.
 
@@ -76,8 +95,13 @@ Your user should be in the `portage` group so the history and live build logs ar
 Browsing and previews run as your user. The first action that needs root starts
 `portagehub-helper` through **pkexec** (polkit asks for your password once per session).
 The helper only runs Portage tools (`emerge`, `emaint`, `eselect`, `egencache`, …),
-writes only below `/etc/portage`, and otherwise only accepts or discards `._cfg` config
-updates below `/etc`. If you close PortageHub during an emerge, the helper keeps it
+writes only below `/etc/portage`, and otherwise only performs a few operations whose
+arguments it checks itself: accepting or discarding `._cfg` config updates below `/etc`,
+a read-only boot scan, grub-mkconfig/lilo/bootctl/dracut with fixed arguments, recording
+known-good kernels in `/var/lib/kernel-fallback` (or `/var/lib/portagehub/kernels`), and
+deleting files of kernels that no installed package owns (never the running or a
+known-good kernel). After updating PortageHub, run `sudo dist/install.sh` again — the
+app warns when the installed helper is older than the GUI. If you close PortageHub during an emerge, the helper keeps it
 running until it finishes.
 
 To install system-wide (adds the polkit policy so the prompt shows a proper message and

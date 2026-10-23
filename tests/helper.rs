@@ -115,3 +115,57 @@ fn cancel_running_job() {
     drop(h.stdin);
     let _ = h.child.wait();
 }
+
+#[test]
+fn kernel_ops_refuse_unsafe_requests() {
+    use portagehub::protocol::BootAction;
+    let mut h = Helper::start();
+    h.until(|e| matches!(e, Event::Ready { version: Some(_), .. }), 10);
+    let err = |evs: &[Event], id: u64| -> String {
+        evs.iter()
+            .find_map(|e| match e {
+                Event::Err { id: i, msg } if *i == id => Some(msg.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    };
+
+    let running = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap().trim().to_string();
+    h.send(1, Op::RemoveKernelLeftovers { kver: running, old_only: false });
+    let evs = h.until(|e| matches!(e, Event::Err { id: 1, .. } | Event::Ok { id: 1 }), 30);
+    assert!(err(&evs, 1).contains("running kernel"), "{evs:?}");
+
+    h.send(2, Op::RemoveKernelLeftovers { kver: "../../etc".into(), old_only: false });
+    let evs = h.until(|e| matches!(e, Event::Err { id: 2, .. } | Event::Ok { id: 2 }), 10);
+    assert!(err(&evs, 2).contains("invalid"), "{evs:?}");
+
+    h.send(3, Op::BootAction { action: BootAction::DracutRegen, kver: Some("6.1/../../x".into()) });
+    let evs = h.until(|e| matches!(e, Event::Err { id: 3, .. } | Event::Started { id: 3, .. }), 10);
+    assert!(err(&evs, 3).contains("unknown kernel"), "{evs:?}");
+
+    h.send(4, Op::MarkGood { kver: "1.0".into(), state_dir: "/tmp/evil".into(), backup: false });
+    let evs = h.until(|e| matches!(e, Event::Err { id: 4, .. } | Event::Ok { id: 4 }), 10);
+    assert!(err(&evs, 4).contains("not allowed"), "{evs:?}");
+
+    // Read-only scan works unprivileged and says so.
+    h.send(5, Op::BootScan);
+    let evs = h.until(|e| matches!(e, Event::Ok { id: 5 }), 30);
+    let data = evs
+        .iter()
+        .find_map(|e| match e {
+            Event::Data { id: 5, text } => Some(text.clone()),
+            _ => None,
+        })
+        .expect("boot scan data");
+    let scan: portagehub::protocol::BootScan = serde_json::from_str(&data).unwrap();
+    assert_eq!(scan.root, unsafe { libc::geteuid() } == 0);
+
+    // An unknown operation is answered with the request id (old/new mismatch).
+    writeln!(h.stdin, r#"{{"id":6,"op":"does_not_exist"}}"#).unwrap();
+    h.stdin.flush().unwrap();
+    let evs = h.until(|e| matches!(e, Event::Err { id: 6, .. }), 10);
+    assert!(err(&evs, 6).contains("unsupported"), "{evs:?}");
+
+    drop(h.stdin);
+    let _ = h.child.wait();
+}

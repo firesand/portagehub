@@ -26,7 +26,7 @@ fn main() {
     });
 
     let uid = unsafe { libc::getuid() };
-    let _ = tx.send(Event::Ready { uid });
+    let _ = tx.send(Event::Ready { uid, version: Some(env!("CARGO_PKG_VERSION").to_string()) });
 
     let server = Server::default();
     let tx_sink = std::sync::Mutex::new(tx.clone());
@@ -43,7 +43,10 @@ fn main() {
         match serde_json::from_str::<Request>(&line) {
             Ok(req) => server.handle(req, sink.clone()),
             Err(e) => {
-                let _ = tx.send(Event::Err { id: 0, msg: format!("bad request: {e}") });
+                // Answer with the request's id so the GUI can fail that request
+                // (e.g. an operation this helper version doesn't know).
+                let id = serde_json::from_str::<serde_json::Value>(&line).ok().and_then(|v| v.get("id").and_then(|i| i.as_u64())).unwrap_or(0);
+                let _ = tx.send(Event::Err { id, msg: format!("unsupported request ({e}); the installed helper may be older than PortageHub — run sudo dist/install.sh") });
             }
         }
     }

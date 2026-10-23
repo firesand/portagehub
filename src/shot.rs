@@ -22,6 +22,9 @@ pub enum Step {
     WriteTest,
     Apply,
     CheckWorld,
+    MPage(String),
+    BootScan,
+    CleanScan(String),
     Wait(f32),
     Shot(PathBuf),
     Exit,
@@ -47,6 +50,7 @@ impl Script {
                     "overlays" => Tab::Overlays,
                     "config" => Tab::Config,
                     "history" => Tab::History,
+                    "maintenance" => Tab::Maintenance,
                     "settings" => Tab::Settings,
                     _ => Tab::Store,
                 }),
@@ -62,6 +66,9 @@ impl Script {
                 "writetest" => Step::WriteTest,
                 "apply" => Step::Apply,
                 "checkworld" => Step::CheckWorld,
+                "mpage" => Step::MPage(v.to_string()),
+                "bootscan" => Step::BootScan,
+                "cleanscan" => Step::CleanScan(v.to_string()),
                 "wait" => Step::Wait(v.parse().unwrap_or(1.0)),
                 "shot" => Step::Shot(PathBuf::from(v)),
                 "exit" => Step::Exit,
@@ -186,6 +193,27 @@ pub fn run(app: &mut App, ctx: &egui::Context, script: &mut Script) {
                 });
             }
             Step::CheckWorld => app.push(Action::CheckWorld),
+            Step::MPage(p) => {
+                app.tab = Tab::Maintenance;
+                app.maintenance.page = if p == "cleanup" { crate::views::maintenance::Page::Cleanup } else { crate::views::maintenance::Page::Kernels };
+            }
+            Step::CleanScan(tag) => {
+                let argv: Vec<String> = match tag.as_str() {
+                    "distfiles" => vec!["eclean-dist", "--deep", "--pretend"],
+                    "binpkgs" => vec!["eclean-pkg", "--deep", "--pretend"],
+                    _ => vec!["emerge", "--pretend", "--depclean", "--color=n", "--nospinner", "--ask=n"],
+                }
+                .into_iter()
+                .map(String::from)
+                .collect();
+                app.push(Action::Job { title: format!("scan {tag}"), argv, kind: crate::app::JobKind::CleanupScan { tag } });
+            }
+            Step::BootScan => app.push(Action::RootOp {
+                title: "Read boot configuration".into(),
+                op: portagehub::protocol::Op::BootScan,
+                kind: crate::app::JobKind::BootScan,
+                reload: vec![],
+            }),
             Step::Apply => {
                 if let Some(r) = app.review.take() {
                     app.apply_changes(r.title, r.changes, r.reload, r.then);

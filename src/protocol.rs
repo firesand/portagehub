@@ -52,6 +52,113 @@ pub enum Op {
         path: String,
         accept: bool,
     },
+    /// Read-only scan of root-only boot files (bootloader configs, /boot listings).
+    BootScan,
+    /// Run a bootloader/initramfs tool with arguments fixed by the helper.
+    BootAction {
+        action: BootAction,
+        #[serde(default)]
+        kver: Option<String>,
+    },
+    /// Record `kver` as the last known-good kernel in `state_dir` (rotating the
+    /// previous one) and optionally back up its /boot files.
+    MarkGood {
+        kver: String,
+        state_dir: String,
+        #[serde(default)]
+        backup: bool,
+    },
+    /// Delete files of a kernel no installed package owns any more
+    /// (/boot images, /lib/modules/<kver>, /usr/src/linux-<kver>).
+    /// With `old_only`, only the `*.old` copies in /boot are removed.
+    RemoveKernelLeftovers {
+        kver: String,
+        #[serde(default)]
+        old_only: bool,
+    },
+    /// Delete leftover build directories below PORTAGE_TMPDIR (refused while emerge runs).
+    CleanBuildDirs,
+}
+
+impl Op {
+    /// Operations added in protocol 0.2 (older helpers reject them).
+    pub fn needs_v2(&self) -> bool {
+        matches!(self, Op::BootScan | Op::BootAction { .. } | Op::MarkGood { .. } | Op::RemoveKernelLeftovers { .. } | Op::CleanBuildDirs)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BootAction {
+    GrubMkconfig,
+    Lilo,
+    BootctlUpdate,
+    DracutRegen,
+}
+
+impl BootAction {
+    pub fn label(&self) -> &'static str {
+        match self {
+            BootAction::GrubMkconfig => "Regenerate GRUB menu (grub-mkconfig)",
+            BootAction::Lilo => "Re-install LILO (lilo)",
+            BootAction::BootctlUpdate => "Update systemd-boot (bootctl update)",
+            BootAction::DracutRegen => "Rebuild initramfs (dracut)",
+        }
+    }
+}
+
+/// Directories where known-good kernel state may be kept.
+pub const KERNEL_STATE_DIRS: &[&str] = &["/var/lib/kernel-fallback", "/var/lib/portagehub/kernels"];
+
+/// A kernel release string such as `7.3.0-cachyos-dist`: one path component.
+pub fn valid_kver(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && s.as_bytes()[0].is_ascii_digit()
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || "._+-".contains(c))
+        && !s.contains("..")
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ScannedFile {
+    pub path: String,
+    pub content: String,
+    pub mtime: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ListEntry {
+    pub name: String,
+    pub size: u64,
+    pub mtime: i64,
+    pub is_dir: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct Listing {
+    pub dir: String,
+    pub entries: Vec<ListEntry>,
+}
+
+/// Result of [`Op::BootScan`], sent as JSON in an [`Event::Data`].
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct BootScan {
+    pub files: Vec<ScannedFile>,
+    pub listings: Vec<Listing>,
+    pub errors: Vec<String>,
+    /// The scan ran as root (otherwise root-only files were unreadable).
+    #[serde(default)]
+    pub root: bool,
+}
+
+impl BootScan {
+    pub fn file(&self, path: &str) -> Option<&ScannedFile> {
+        self.files.iter().find(|f| f.path == path)
+    }
+
+    pub fn listing(&self, dir: &str) -> Option<&Listing> {
+        self.listings.iter().find(|l| l.dir == dir)
+    }
 }
 
 /// Validate a `._cfgNNNN_name` path below /etc and return (update, target).
@@ -82,7 +189,13 @@ pub enum StreamKind {
 #[serde(tag = "ev", rename_all = "snake_case")]
 pub enum Event {
     /// Sent once by the helper right after start-up.
-    Ready { uid: u32 },
+    Ready {
+        uid: u32,
+        #[serde(default)]
+        version: Option<String>,
+    },
+    /// Structured result of a request (JSON text).
+    Data { id: u64, text: String },
     Started { id: u64, pid: u32 },
     /// A complete output line (ANSI escapes removed).
     Line { id: u64, stream: StreamKind, text: String },
@@ -99,6 +212,7 @@ impl Event {
             Event::Ready { .. } => None,
             Event::Started { id, .. }
             | Event::Line { id, .. }
+            | Event::Data { id, .. }
             | Event::Partial { id, .. }
             | Event::Exit { id, .. }
             | Event::Ok { id }
@@ -199,6 +313,16 @@ mod tests {
         assert!(config_update_paths("/home/u/._cfg0001_x").is_none());
         assert!(config_update_paths("/etc/ssh/sshd_config").is_none());
         assert!(config_update_paths("/etc/._cfg01_x").is_none());
+    }
+
+    #[test]
+    fn kvers() {
+        assert!(valid_kver("7.3.0-cachyos-dist"));
+        assert!(valid_kver("6.12.8-gentoo-dist"));
+        assert!(!valid_kver("../etc"));
+        assert!(!valid_kver("7.3/0"));
+        assert!(!valid_kver("x7.3"));
+        assert!(!valid_kver(""));
     }
 
     #[test]

@@ -25,6 +25,22 @@ pub struct Settings {
     pub log_wrap: bool,
     /// Run `emerge -uDN @world --pretend` in the background to verify the update list.
     pub auto_world_check: bool,
+    /// Keep known-good kernels in a package set that is part of @world.
+    pub kernel_protect: bool,
+    pub kernel_keep_set: String,
+    /// Copy the kernel's /boot files to /boot/kernel-backup when marking it known-good.
+    pub kernel_backup_on_mark: bool,
+    /// Require a working `nvidia-smi` before marking a kernel known-good (NVIDIA systems).
+    pub kernel_mark_requires_nvidia: bool,
+    /// Newest bootable kernels kept when cleaning (besides running and known-good).
+    pub kernel_keep_newest: usize,
+    /// Refuse to clean old kernels while the newest one is not marked known-good.
+    pub kernel_require_marked_newest: bool,
+    /// After an emerge touches kernels, bootloaders or NVIDIA drivers, check the boot setup.
+    pub boot_check_after_kernel: bool,
+    pub nvidia_alerts: bool,
+    /// Build logs older than this are offered for cleaning.
+    pub log_keep_days: u32,
 }
 
 impl Default for Settings {
@@ -41,6 +57,15 @@ impl Default for Settings {
             beginner_tips: true,
             log_wrap: false,
             auto_world_check: true,
+            kernel_protect: true,
+            kernel_keep_set: "kernels-keep".into(),
+            kernel_backup_on_mark: true,
+            kernel_mark_requires_nvidia: true,
+            kernel_keep_newest: 1,
+            kernel_require_marked_newest: true,
+            boot_check_after_kernel: true,
+            nvidia_alerts: true,
+            log_keep_days: 30,
         }
     }
 }

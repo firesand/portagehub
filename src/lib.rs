@@ -3,5 +3,6 @@
 //! request handler.
 
 pub mod protocol;
+pub mod rootops;
 pub mod server;
 pub mod stream;

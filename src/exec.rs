@@ -30,7 +30,7 @@ pub enum HelperState {
 #[derive(Debug)]
 pub enum ExecMsg {
     Event(Event),
-    HelperReady,
+    HelperReady(Option<String>),
     HelperGone(String),
 }
 
@@ -53,6 +53,8 @@ pub struct Executor {
     queued: VecDeque<Request>,
     user_pids: Arc<Mutex<HashMap<u64, u32>>>,
     pub helper_path: Option<PathBuf>,
+    /// The running helper reported a different version than the GUI.
+    pub helper_outdated: bool,
 }
 
 pub fn find_helper() -> Option<PathBuf> {
@@ -83,6 +85,7 @@ impl Executor {
             queued: VecDeque::new(),
             user_pids: Arc::default(),
             helper_path: find_helper(),
+            helper_outdated: false,
         }
     }
 
@@ -138,6 +141,10 @@ impl Executor {
         id
     }
 
+    pub fn root_op_with_id(&mut self, id: u64, op: Op) {
+        self.submit_root(Request { id, op });
+    }
+
     pub fn cancel(&mut self, id: u64, privilege: Priv, signal: i32) {
         match privilege {
             Priv::User => {
@@ -171,6 +178,13 @@ impl Executor {
 
     fn send_to_helper(&mut self, req: Request) {
         let id = req.id;
+        if self.helper_outdated && req.op.needs_v2() {
+            let _ = self.tx.send(ExecMsg::Event(Event::Err {
+                id,
+                msg: "the installed admin helper is too old for this action — run sudo dist/install.sh, then restart PortageHub".into(),
+            }));
+            return;
+        }
         let line = serde_json::to_string(&req).unwrap_or_default();
         let ok = match self.helper.as_mut() {
             Some(h) => writeln!(h.stdin, "{line}").and_then(|_| h.stdin.flush()).is_ok(),
@@ -233,8 +247,8 @@ impl Executor {
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 match serde_json::from_str::<Event>(&line) {
-                    Ok(Event::Ready { .. }) => {
-                        let _ = tx.send(ExecMsg::HelperReady);
+                    Ok(Event::Ready { version, .. }) => {
+                        let _ = tx.send(ExecMsg::HelperReady(version));
                     }
                     Ok(ev) => {
                         if let Some(id) = ev.id()
@@ -270,8 +284,9 @@ impl Executor {
     }
 
     /// Called by the app when the helper reported Ready.
-    pub fn on_helper_ready(&mut self) {
+    pub fn on_helper_ready(&mut self, version: Option<&str>) {
         self.helper_state = HelperState::Ready;
+        self.helper_outdated = version != Some(env!("CARGO_PKG_VERSION"));
         while let Some(r) = self.queued.pop_front() {
             self.send_to_helper(r);
         }

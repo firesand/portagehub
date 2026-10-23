@@ -73,6 +73,26 @@ fn self_test() {
         println!("detail vim: {} versions, slots {:?}, flags {} ({:?})", d.versions.len(), d.slots(), d.xml.flags.len(), t.elapsed());
     }
     let t = std::time::Instant::now();
+    let ks = portage::kernel::load(data.vdb.as_ref().unwrap(), "kernels-keep");
+    println!("kernels ({:?}): running {} · last-good {:?} · previous-good {:?} · bootloader {:?} (detected {:?}, current {:?}) · initramfs {:?}", t.elapsed(), ks.running, ks.last_good, ks.previous_good, ks.boot.primary, ks.boot.detected, ks.boot.current, ks.boot.initramfs_tool);
+    for k in &ks.kernels {
+        println!(
+            "  {:<22} pkg={:<38} image={} initramfs={} modules={} sources={} old={} nvidia={:?}",
+            k.kver,
+            k.pkg.clone().unwrap_or("-".into()),
+            k.image.is_some(),
+            k.initramfs.is_some(),
+            k.modules,
+            k.sources,
+            k.old_files.len(),
+            ks.nvidia_status(k)
+        );
+    }
+    println!("  orphan kernel packages: {:?} · keep set {:?} in world: {} · nvidia {:?}", ks.orphan_packages, ks.keep_set_atoms, ks.keep_set_in_world, ks.nvidia);
+    for f in portage::kernel::check(&ks, None, true, 2, true) {
+        println!("  [{:?}] {} — {}", f.severity, f.title, f.detail);
+    }
+    let t = std::time::Instant::now();
     let u = data::compute_updates(&data);
     println!("updates: {} ({:?})", u.len(), t.elapsed());
     for c in u.iter() {

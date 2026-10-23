@@ -2,6 +2,7 @@
 //! runs as root (then no helper process is needed).
 
 use crate::protocol::{self, Event, Op, Request};
+use crate::rootops;
 use crate::stream::spawn_streaming;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -38,29 +39,25 @@ impl Server {
                     return reply(Err(format!("program not allowed: {first}")));
                 };
                 let env: Vec<_> = env.into_iter().filter(|(k, _)| protocol::env_key_allowed(k)).collect();
-                let pg = self.pgids.clone();
-                let run = self.running.clone();
-                *self.running.lock().unwrap() += 1;
-                let inner = sink.clone();
-                let wrapped: Sink = Arc::new(move |ev: Event| {
-                    if let Event::Exit { id, .. } = &ev {
-                        pg.lock().unwrap().remove(id);
-                        let mut r = run.lock().unwrap();
-                        *r = r.saturating_sub(1);
-                    }
-                    inner(ev);
-                });
-                match spawn_streaming(id, &program, &argv[1..], &env, cwd.as_deref().or(Some("/")), wrapped) {
-                    Ok(pid) => {
-                        self.pgids.lock().unwrap().insert(id, pid);
-                    }
-                    Err(e) => {
-                        let mut r = self.running.lock().unwrap();
-                        *r = r.saturating_sub(1);
-                        drop(r);
-                        reply(Err(format!("failed to start {program}: {e}")));
-                    }
-                }
+                self.spawn_tracked(id, &program, &argv[1..], &env, cwd.as_deref(), sink);
+            }
+            Op::BootScan => {
+                let scan = rootops::boot_scan();
+                sink(Event::Data { id, text: serde_json::to_string(&scan).unwrap_or_default() });
+                reply(Ok(()));
+            }
+            Op::BootAction { action, kver } => match rootops::boot_action_argv(action, kver.as_deref()) {
+                Ok((program, args)) => self.spawn_tracked(id, &program, &args, &[], None, sink),
+                Err(e) => reply(Err(e)),
+            },
+            Op::MarkGood { kver, state_dir, backup } => {
+                self.blocking(id, sink, move |log| rootops::mark_good(&kver, &state_dir, backup, log));
+            }
+            Op::RemoveKernelLeftovers { kver, old_only } => {
+                self.blocking(id, sink, move |log| rootops::remove_kernel_leftovers(&kver, old_only, log));
+            }
+            Op::CleanBuildDirs => {
+                self.blocking(id, sink, rootops::clean_build_dirs);
             }
             Op::WriteFile { path, content, backup } => reply(write_file(&path, &content, backup)),
             Op::DeleteFile { path } => reply(
@@ -112,6 +109,51 @@ impl Server {
                 }
             }
         }
+    }
+}
+
+impl Server {
+    fn spawn_tracked(&self, id: u64, program: &str, args: &[String], env: &[(String, String)], cwd: Option<&str>, sink: Sink) {
+        let pg = self.pgids.clone();
+        let run = self.running.clone();
+        *self.running.lock().unwrap() += 1;
+        let inner = sink.clone();
+        let wrapped: Sink = Arc::new(move |ev: Event| {
+            if let Event::Exit { id, .. } = &ev {
+                pg.lock().unwrap().remove(id);
+                let mut r = run.lock().unwrap();
+                *r = r.saturating_sub(1);
+            }
+            inner(ev);
+        });
+        match spawn_streaming(id, program, args, env, cwd.or(Some("/")), wrapped) {
+            Ok(pid) => {
+                self.pgids.lock().unwrap().insert(id, pid);
+            }
+            Err(e) => {
+                let mut r = self.running.lock().unwrap();
+                *r = r.saturating_sub(1);
+                drop(r);
+                sink(Event::Err { id, msg: format!("failed to start {program}: {e}") });
+            }
+        }
+    }
+
+    /// Run a slow operation on its own thread, streaming log lines, ending in Ok/Err.
+    fn blocking(&self, id: u64, sink: Sink, f: impl FnOnce(&dyn Fn(String)) -> Result<(), String> + Send + 'static) {
+        let run = self.running.clone();
+        *run.lock().unwrap() += 1;
+        std::thread::spawn(move || {
+            let s2 = sink.clone();
+            let log = move |text: String| s2(Event::Line { id, stream: crate::protocol::StreamKind::Stdout, text });
+            let r = f(&log);
+            sink(match r {
+                Ok(()) => Event::Ok { id },
+                Err(msg) => Event::Err { id, msg },
+            });
+            let mut r = run.lock().unwrap();
+            *r = r.saturating_sub(1);
+        });
     }
 }
 

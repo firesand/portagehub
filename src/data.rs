@@ -31,6 +31,8 @@ pub struct Data {
     pub news: Option<Arc<Vec<NewsItem>>>,
     pub updates: Option<Arc<Vec<UpdateCandidate>>>,
     pub masks: Option<Arc<MaskDb>>,
+    pub kernels: Option<Arc<crate::portage::kernel::KernelState>>,
+    pub leftovers: Option<Arc<crate::portage::cleanup::Leftovers>>,
 }
 
 impl Data {
@@ -63,6 +65,8 @@ pub enum Reload {
     News,
     Updates,
     Masks,
+    Kernels,
+    Leftovers,
 }
 
 pub enum DataMsg {
@@ -79,6 +83,8 @@ pub enum DataMsg {
     News(Arc<Vec<NewsItem>>),
     Updates(Arc<Vec<UpdateCandidate>>),
     Masks(Arc<MaskDb>),
+    Kernels(Arc<crate::portage::kernel::KernelState>),
+    Leftovers(Arc<crate::portage::cleanup::Leftovers>),
     Detail(String, Arc<PkgDetail>),
     Ebuild(PathBuf, Arc<String>),
 }

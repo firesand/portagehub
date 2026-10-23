@@ -66,6 +66,36 @@ pub fn replace_entry(cfg: &PortageConfig, path: &Path, idx: usize, entry: Option
     FileChange { path: path.to_path_buf(), old: f.raw.clone(), new: Some(new) }
 }
 
+/// Remove several lines (possibly across files) in one go.
+pub fn remove_lines(cfg: &PortageConfig, lines: &[(PathBuf, usize)]) -> Vec<FileChange> {
+    let mut per_file: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
+    for (p, i) in lines {
+        per_file.entry(p.clone()).or_default().push(*i);
+    }
+    per_file
+        .into_iter()
+        .map(|(path, mut idx)| {
+            let f = conf_file(cfg, &path);
+            let old = f.raw.clone();
+            let mut lines = f.lines.clone();
+            let mut raw: Vec<&str> = old.lines().collect();
+            idx.sort_unstable();
+            idx.dedup();
+            for i in idx.into_iter().rev() {
+                if i < lines.len() {
+                    lines.remove(i);
+                }
+                if i < raw.len() {
+                    raw.remove(i);
+                }
+            }
+            let nf = ConfFile { lines, raw: raw.join("\n"), ..f };
+            let new = nf.render();
+            FileChange { path, old, new: Some(new) }
+        })
+        .collect()
+}
+
 /// Set per-package USE flags: updates the user's existing line for exactly
 /// this atom when there is one, otherwise adds a new line.
 pub fn set_use_flags(cfg: &PortageConfig, atom: &str, changes: &[(String, Tri)], file_name: &str) -> Vec<FileChange> {
@@ -205,6 +235,13 @@ mod tests {
             sets: vec![ConfSet { kind: ConfKind::Use, base: "/etc/portage/package.use".into(), exists: true, is_dir: true, files: vec![f] }],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn bulk_remove() {
+        let cfg = cfg_with("# c\napp-misc/a x\napp-misc/b y\napp-misc/c z\n");
+        let ch = remove_lines(&cfg, &[("/etc/portage/package.use/a".into(), 1), ("/etc/portage/package.use/a".into(), 3)]);
+        assert_eq!(ch[0].new.as_deref(), Some("# c\napp-misc/b y\n"));
     }
 
     #[test]

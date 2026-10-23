@@ -26,12 +26,13 @@ pub enum Tab {
     Emerge,
     Overlays,
     Config,
+    Maintenance,
     History,
     Settings,
 }
 
 impl Tab {
-    pub const MAIN: [Tab; 6] = [Tab::Store, Tab::Library, Tab::Emerge, Tab::Overlays, Tab::Config, Tab::History];
+    pub const MAIN: [Tab; 7] = [Tab::Store, Tab::Library, Tab::Emerge, Tab::Overlays, Tab::Config, Tab::Maintenance, Tab::History];
 
     pub fn label(&self) -> &'static str {
         match self {
@@ -40,6 +41,7 @@ impl Tab {
             Tab::Emerge => "Emerge",
             Tab::Overlays => "Overlays",
             Tab::Config => "Configuration",
+            Tab::Maintenance => "Maintenance",
             Tab::History => "History",
             Tab::Settings => "Settings",
         }
@@ -88,6 +90,10 @@ pub enum Action {
     LoadEbuild(PathBuf),
     RePretend,
     CheckWorld,
+    /// A privileged helper operation shown as a job.
+    RootOp { title: String, op: Op, kind: JobKind, reload: Vec<Reload> },
+    /// An unprivileged background command with a specific job kind.
+    Job { title: String, argv: Vec<String>, kind: JobKind },
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +105,12 @@ pub enum JobKind {
     Capture { tag: String },
     /// Background `emerge -uDN @world --pretend` for the Store's update list.
     WorldCheck,
+    /// Root-only boot files (JSON from the helper).
+    BootScan,
+    /// Something that changed boot files: re-check afterwards.
+    BootFix,
+    /// `emerge --pretend --depclean`, eclean-* --pretend for the Cleanup page.
+    CleanupScan { tag: String },
 }
 
 #[derive(Debug, Clone)]
@@ -214,6 +226,12 @@ pub struct App {
     pub world_plan: Option<(Arc<Plan>, i64)>,
     pub world_job: Option<u64>,
     world_auto_done: bool,
+    pub boot_scan: Option<(Arc<portagehub::protocol::BootScan>, i64)>,
+    /// A kernel/bootloader/NVIDIA change happened: report the boot check when it lands.
+    kernel_attention: bool,
+    pub maintenance: views::maintenance::State,
+    /// Output of cleanup scans by tag ("depclean", "distfiles", "binpkgs") with time.
+    pub cleanup_scans: HashMap<String, (String, Option<i32>, i64)>,
 }
 
 fn world_cache_path() -> PathBuf {
@@ -240,6 +258,25 @@ fn save_world_cache(ts: i64, code: Option<i32>, output: &str) {
         let _ = std::fs::create_dir_all(d);
     }
     let _ = std::fs::write(p, format!("{ts} {}\n{output}", code.map(|c| c.to_string()).unwrap_or_else(|| "-".into())));
+}
+
+fn cleanup_cache_path(tag: &str) -> PathBuf {
+    world_cache_path().with_file_name(format!("cleanup-{tag}.txt"))
+}
+
+fn load_cleanup_cache() -> HashMap<String, (String, Option<i32>, i64)> {
+    let mut m = HashMap::new();
+    for tag in ["depclean", "distfiles", "binpkgs"] {
+        if let Ok(text) = std::fs::read_to_string(cleanup_cache_path(tag))
+            && let Some((head, body)) = text.split_once('\n')
+        {
+            let mut it = head.split_whitespace();
+            let ts: i64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+            let code = it.next().and_then(|c| c.parse().ok());
+            m.insert(tag.to_string(), (body.to_string(), code, ts));
+        }
+    }
+    m
 }
 
 impl App {
@@ -289,6 +326,10 @@ impl App {
             world_plan: load_world_cache(),
             world_job: None,
             world_auto_done: false,
+            boot_scan: None,
+            kernel_attention: false,
+            maintenance: Default::default(),
+            cleanup_scans: load_cleanup_cache(),
         };
         for r in [Reload::Repos, Reload::Vdb, Reload::History, Reload::Config, Reload::MakeConf, Reload::Env] {
             app.spawn_load(r);
@@ -384,7 +425,11 @@ impl App {
     }
 
     pub fn running_count(&self) -> usize {
-        self.jobs.iter().filter(|j| j.running() && !matches!(j.kind, JobKind::Capture { .. } | JobKind::WorldCheck)).count() + self.batches.len()
+        self.jobs
+            .iter()
+            .filter(|j| j.running() && !matches!(j.kind, JobKind::Capture { .. } | JobKind::WorldCheck | JobKind::BootScan | JobKind::CleanupScan { .. }))
+            .count()
+            + self.batches.len()
     }
 
     // ------------------------------------------------------------------
@@ -404,6 +449,8 @@ impl App {
                 self.spawn_load(Reload::Repos);
                 return;
             }
+            Reload::Kernels if snapshot.vdb.is_none() => return,
+            Reload::Leftovers if snapshot.vdb.is_none() || snapshot.catalog.is_none() || snapshot.config.is_none() || snapshot.env.is_none() => return,
             Reload::Updates
                 if snapshot.catalog.is_none()
                     || snapshot.vdb.is_none()
@@ -416,6 +463,8 @@ impl App {
             _ => {}
         }
         self.loading.insert(r);
+        let keep_set = self.settings.kernel_keep_set.clone();
+        let log_days = self.settings.log_keep_days;
         std::thread::spawn(move || {
             let msg = match r {
                 Reload::Repos => DataMsg::Repos(Arc::new(repos::load())),
@@ -451,6 +500,18 @@ impl App {
                 }
                 Reload::Updates => DataMsg::Updates(Arc::new(data::compute_updates(&snapshot))),
                 Reload::Masks => DataMsg::Masks(Arc::new(crate::portage::profile::load(snapshot.repos.as_ref().unwrap()))),
+                Reload::Kernels => DataMsg::Kernels(Arc::new(crate::portage::kernel::load(snapshot.vdb.as_ref().unwrap(), &keep_set))),
+                Reload::Leftovers => {
+                    let env = snapshot.env.as_ref().unwrap();
+                    DataMsg::Leftovers(Arc::new(crate::portage::cleanup::scan(
+                        snapshot.vdb.as_ref().unwrap(),
+                        snapshot.catalog.as_ref().unwrap(),
+                        snapshot.config.as_ref().unwrap(),
+                        env.arch(),
+                        env.get("PORT_LOGDIR"),
+                        log_days,
+                    )))
+                }
             };
             let _ = tx.send(msg);
             ctx.request_repaint();
@@ -513,12 +574,15 @@ impl App {
                 self.data.catalog = Some(c);
                 self.invalidate_details();
                 self.spawn_load(Reload::Updates);
+                self.spawn_load(Reload::Leftovers);
             }
             DataMsg::Vdb(v) => {
                 done(self, Reload::Vdb);
                 self.data.vdb = Some(v);
                 self.invalidate_details();
                 self.spawn_load(Reload::Updates);
+                self.spawn_load(Reload::Kernels);
+                self.spawn_load(Reload::Leftovers);
             }
             DataMsg::History(h) => {
                 done(self, Reload::History);
@@ -529,6 +593,7 @@ impl App {
                 self.data.config = Some(c);
                 self.invalidate_details();
                 self.spawn_load(Reload::Updates);
+                self.spawn_load(Reload::Leftovers);
             }
             DataMsg::MakeConf(m) => {
                 done(self, Reload::MakeConf);
@@ -539,6 +604,7 @@ impl App {
                 self.data.env = Some(e);
                 self.invalidate_details();
                 self.spawn_load(Reload::Updates);
+                self.spawn_load(Reload::Leftovers);
             }
             DataMsg::UseDesc(u) => {
                 done(self, Reload::UseDesc);
@@ -555,6 +621,17 @@ impl App {
             DataMsg::News(n) => {
                 done(self, Reload::News);
                 self.data.news = Some(n);
+            }
+            DataMsg::Kernels(k) => {
+                done(self, Reload::Kernels);
+                self.data.kernels = Some(k);
+                if self.kernel_attention && !self.exec.root_ready() {
+                    self.report_boot_check();
+                }
+            }
+            DataMsg::Leftovers(l) => {
+                done(self, Reload::Leftovers);
+                self.data.leftovers = Some(l);
             }
             DataMsg::Masks(m) => {
                 done(self, Reload::Masks);
@@ -619,9 +696,20 @@ impl App {
 
     fn handle_exec(&mut self, msg: ExecMsg) {
         match msg {
-            ExecMsg::HelperReady => {
-                self.exec.on_helper_ready();
-                self.toast(ToastKind::Success, "Administrator session started — privileged actions won't ask again.");
+            ExecMsg::HelperReady(version) => {
+                self.exec.on_helper_ready(version.as_deref());
+                let mine = env!("CARGO_PKG_VERSION");
+                if self.exec.helper_outdated {
+                    self.toast(
+                        ToastKind::Warn,
+                        format!(
+                            "The installed admin helper ({}) is older than PortageHub {mine}. Kernel, boot and cleanup actions need the new one: run sudo dist/install.sh.",
+                            version.unwrap_or_else(|| "0.1".into())
+                        ),
+                    );
+                } else {
+                    self.toast(ToastKind::Success, "Administrator session started — privileged actions won't ask again.");
+                }
             }
             ExecMsg::HelperGone(reason) => {
                 let was = self.exec.helper_state.clone();
@@ -654,7 +742,16 @@ impl App {
         let history = self.data.history.clone().unwrap_or_default();
         let job = &mut self.jobs[ji];
         match ev {
-            Event::Started { .. } | Event::Ready { .. } | Event::Ok { .. } => {}
+            Event::Started { .. } | Event::Ready { .. } => {}
+            Event::Data { text, .. } => {
+                job.lines.push((false, text));
+            }
+            Event::Ok { .. } => {
+                // Helper operations (not programs) finish with Ok.
+                job.exit = Some(Some(0));
+                job.ended = Some(Instant::now());
+                self.finish_job(ji);
+            }
             Event::Line { stream, text, .. } => {
                 if let JobKind::Emerge { tracker, .. } = &mut job.kind {
                     tracker.feed(&text, &history);
@@ -716,6 +813,22 @@ impl App {
                 if self.settings.auto_world_check {
                     self.actions.push(Action::CheckWorld);
                 }
+                self.spawn_load(Reload::Leftovers);
+                let touched_kernel = match &job.kind {
+                    JobKind::Emerge { tracker, .. } => tracker.items.iter().any(|i| {
+                        i.stage == crate::portage::progress::Stage::Done
+                            && (i.key.starts_with("sys-kernel/") || i.key.starts_with("sys-boot/") || i.key == "virtual/dist-kernel" || i.key == "x11-drivers/nvidia-drivers")
+                    }),
+                    _ => false,
+                };
+                if touched_kernel && self.settings.boot_check_after_kernel {
+                    self.kernel_attention = true;
+                    self.toast(ToastKind::Info, "A kernel, bootloader or NVIDIA driver changed — checking the boot setup…");
+                    self.spawn_load(Reload::Kernels);
+                    if self.exec.root_ready() {
+                        self.actions.push(Action::RootOp { title: "Read boot configuration".into(), op: Op::BootScan, kind: JobKind::BootScan, reload: vec![] });
+                    }
+                }
                 let out = job.output();
                 if out.contains("needs updating") {
                     self.toast(ToastKind::Warn, "Some configuration files need updating (Configuration → Config updates).");
@@ -735,6 +848,45 @@ impl App {
                 }
                 if ok && self.settings.auto_world_check {
                     self.actions.push(Action::CheckWorld);
+                }
+            }
+            JobKind::BootScan => {
+                if let Some(text) = job.lines.iter().map(|l| l.1.as_str()).find(|l| l.starts_with('{'))
+                    && let Ok(scan) = serde_json::from_str::<portagehub::protocol::BootScan>(text)
+                {
+                    self.boot_scan = Some((Arc::new(scan), crate::fmt::now_ts()));
+                } else if let Some(e) = &job.error {
+                    self.toast(ToastKind::Error, format!("Could not read the boot configuration: {e}"));
+                }
+                if self.kernel_attention {
+                    self.report_boot_check();
+                }
+            }
+            JobKind::BootFix => {
+                if ok {
+                    self.toast(ToastKind::Success, format!("{}: done", job.title));
+                } else {
+                    self.toast(ToastKind::Error, format!("{} failed: {}", job.title, job.error.clone().unwrap_or_else(|| "see the log".into())));
+                }
+                self.spawn_load(Reload::Kernels);
+                self.spawn_load(Reload::Leftovers);
+                if self.exec.root_ready() {
+                    self.actions.push(Action::RootOp { title: "Read boot configuration".into(), op: Op::BootScan, kind: JobKind::BootScan, reload: vec![] });
+                }
+            }
+            JobKind::CleanupScan { tag } => {
+                if job.error.is_none() {
+                    let out = job.output();
+                    let code = job.exit.flatten();
+                    let ts = crate::fmt::now_ts();
+                    let p = cleanup_cache_path(tag);
+                    if let Some(d) = p.parent() {
+                        let _ = std::fs::create_dir_all(d);
+                    }
+                    let _ = std::fs::write(&p, format!("{ts} {}\n{out}", code.map(|c| c.to_string()).unwrap_or_else(|| "-".into())));
+                    self.cleanup_scans.insert(tag.clone(), (out, code, ts));
+                } else {
+                    self.toast(ToastKind::Error, format!("{} failed: {}", job.title, job.error.clone().unwrap_or_default()));
                 }
             }
             JobKind::WorldCheck => {
@@ -902,6 +1054,39 @@ impl App {
                     self.exec.start_helper();
                 }
             }
+            Action::Job { title, argv, kind } => {
+                self.start_job(title, argv, vec![], Priv::User, kind, vec![]);
+            }
+            Action::RootOp { title, op, kind, reload } => {
+                let needs_new_helper = matches!(
+                    op,
+                    Op::BootScan | Op::BootAction { .. } | Op::MarkGood { .. } | Op::RemoveKernelLeftovers { .. } | Op::CleanBuildDirs
+                );
+                let id = self.exec.alloc_id();
+                let label = format!("{op:?}").split([' ', '{']).next().unwrap_or("").to_string();
+                self.jobs.push(Job {
+                    id,
+                    title,
+                    kind,
+                    privilege: Priv::Root,
+                    argv: vec![format!("helper: {label}")],
+                    lines: Vec::new(),
+                    partial: None,
+                    started: Instant::now(),
+                    ended: None,
+                    exit: None,
+                    error: None,
+                    reload,
+                });
+                if needs_new_helper && self.exec.helper_outdated && !self.exec.is_root && self.exec.helper_state == HelperState::Ready {
+                    let ji = self.jobs.len() - 1;
+                    self.jobs[ji].error = Some("the installed admin helper is too old for this action — run sudo dist/install.sh, then restart PortageHub".into());
+                    self.jobs[ji].ended = Some(Instant::now());
+                    self.finish_job(ji);
+                } else {
+                    self.exec.root_op_with_id(id, op);
+                }
+            }
             Action::CheckWorld => {
                 if self.world_job.is_some_and(|id| self.job(id).is_some_and(|j| j.running())) {
                     return;
@@ -938,6 +1123,70 @@ impl App {
             })
             .collect();
         self.apply(Action::Batch { title, ops, reload, then });
+    }
+
+    /// Toast the result of the boot check after a kernel-related change.
+    fn report_boot_check(&mut self) {
+        self.kernel_attention = false;
+        let Some(ks) = self.data.kernels.clone() else { return };
+        let scan = self.boot_scan.as_ref().map(|(s, _)| s.clone());
+        let findings = crate::portage::kernel::check(&ks, scan.as_deref(), self.settings.kernel_protect, 2, self.settings.nvidia_alerts);
+        use crate::portage::kernel::Severity;
+        let bad: Vec<_> = findings.iter().filter(|f| f.severity >= Severity::Warn).collect();
+        if bad.is_empty() {
+            self.toast(ToastKind::Success, "Boot check after the kernel/driver update: everything is in place.");
+        } else {
+            for f in bad.iter().take(3) {
+                self.toast(if f.severity == Severity::Error { ToastKind::Error } else { ToastKind::Warn }, format!("{} — open Maintenance → Kernels & Boot", f.title));
+            }
+        }
+    }
+
+    /// Record the running kernel as known-good and protect it (and the previous one) from depclean.
+    pub fn mark_kernel_good(&mut self, kver: String) {
+        let Some(ks) = self.data.kernels.clone() else { return };
+        if kver != ks.running {
+            self.toast(ToastKind::Warn, format!("Only the kernel you are running can be marked known-good — boot {kver} first."));
+            return;
+        }
+        if self.settings.kernel_mark_requires_nvidia && ks.nvidia.gpu && ks.nvidia.drivers.is_some() {
+            let ok = std::process::Command::new("nvidia-smi").arg("-L").output().is_ok_and(|o| o.status.success());
+            if !ok {
+                self.toast(ToastKind::Error, "nvidia-smi failed: the NVIDIA driver does not work on this kernel, so it is not marked known-good. Rebuild nvidia-drivers first.");
+                return;
+            }
+        }
+        if self.exec.helper_outdated && !self.exec.is_root {
+            self.toast(ToastKind::Error, "The installed admin helper is too old for this — run sudo dist/install.sh, then restart PortageHub.");
+            return;
+        }
+        let new_prev = match &ks.last_good {
+            Some(l) if *l != kver => Some(l.clone()),
+            _ => ks.previous_good.clone(),
+        };
+        let mut ops = vec![Op::MarkGood {
+            kver: kver.clone(),
+            state_dir: ks.state_dir.to_string_lossy().to_string(),
+            backup: self.settings.kernel_backup_on_mark,
+        }];
+        if self.settings.kernel_protect {
+            let atoms = crate::portage::kernel::wanted_keep_atoms(&ks, Some(&kver), new_prev.as_deref());
+            let mut content = String::from("# Proven-good kernels protected from --depclean. Managed by PortageHub (same format as kernel-mark-good).\n");
+            for a in &atoms {
+                content.push_str(a);
+                content.push('\n');
+            }
+            ops.push(Op::WriteFile { path: format!("/etc/portage/sets/{}", ks.keep_set), content, backup: false });
+            if !ks.keep_set_in_world {
+                ops.push(Op::Run { argv: vec!["emerge".into(), "--noreplace".into(), "--ask=n".into(), format!("@{}", ks.keep_set)], env: vec![], cwd: None });
+            }
+        }
+        self.apply(Action::Batch {
+            title: format!("Mark {kver} as known-good"),
+            ops,
+            reload: vec![Reload::Kernels, Reload::Config, Reload::Vdb],
+            then: None,
+        });
     }
 
     /// PORTAGE_TMPDIR for a package, honouring package.env overrides (e.g. a "notmpfs" env file).
@@ -1312,6 +1561,7 @@ impl eframe::App for App {
             Tab::Emerge => views::emerge::show(self, ui),
             Tab::Overlays => views::overlays::show(self, ui),
             Tab::Config => views::config::show(self, ui),
+            Tab::Maintenance => views::maintenance::show(self, ui),
             Tab::History => views::history::show(self, ui),
             Tab::Settings => views::settings::show(self, ui),
         });

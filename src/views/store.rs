@@ -108,6 +108,7 @@ fn home(app: &mut App, ui: &mut Ui) {
     page(ui, "store-home", |ui| {
         hero(app, ui);
         ui.add_space(12.0);
+        kernel_banner(app, ui);
         common::tip(
             app,
             ui,
@@ -180,6 +181,41 @@ fn home(app: &mut App, ui: &mut Ui) {
             }
         }
     });
+}
+
+/// Kernel/boot/NVIDIA problems worth seeing on the home page.
+fn kernel_banner(app: &mut App, ui: &mut Ui) {
+    use crate::portage::kernel::{Severity, check};
+    let Some(ks) = app.data.kernels.clone() else { return };
+    let scan = app.boot_scan.as_ref().map(|(s, _)| s.clone());
+    let findings = check(&ks, scan.as_deref(), app.settings.kernel_protect, 2, app.settings.nvidia_alerts);
+    let important: Vec<_> = findings.iter().filter(|f| f.severity >= Severity::Warn).collect();
+    if important.is_empty() {
+        return;
+    }
+    let worst = important.iter().map(|f| f.severity).max().unwrap_or(Severity::Warn);
+    let tint = if worst == Severity::Error { RED } else { ORANGE };
+    w::card_tinted(tint).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(icon::CPU).size(24.0).color(tint));
+            ui.vertical(|ui| {
+                ui.label(w::strong(format!("Kernels & boot: {}", important[0].title)));
+                if important.len() > 1 {
+                    ui.label(w::dim(format!("+{} more: {}", important.len() - 1, important[1..].iter().map(|f| f.title.as_str()).collect::<Vec<_>>().join(" · "))));
+                } else {
+                    ui.label(w::dim(&important[0].detail));
+                }
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if w::primary(ui, icon::ARROW_RIGHT, "Open Kernels & Boot").clicked() {
+                    app.maintenance.page = crate::views::maintenance::Page::Kernels;
+                    app.push(Action::Tab(Tab::Maintenance));
+                }
+            });
+        });
+    });
+    ui.add_space(8.0);
 }
 
 fn updates_section(app: &mut App, ui: &mut Ui) {

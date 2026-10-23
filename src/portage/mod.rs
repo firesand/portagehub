@@ -2,10 +2,12 @@
 
 pub mod atom;
 pub mod catalog;
+pub mod cleanup;
 pub mod config;
 pub mod dep;
 pub mod emerge;
 pub mod history;
+pub mod kernel;
 pub mod makeconf;
 pub mod metadata;
 pub mod pretend;
