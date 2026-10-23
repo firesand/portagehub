@@ -9,7 +9,7 @@
 use std::ffi::CString;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
 
 /// A directory that confines all operations below it.
@@ -125,6 +125,33 @@ impl Beneath {
     /// Read a regular file (None when it does not exist).
     pub fn read(&self, rel: &Path) -> io::Result<Option<Vec<u8>>> {
         Ok(self.read_with_mode(rel)?.map(|(b, _)| b))
+    }
+
+    /// Target of a symbolic link (None when `rel` is no symlink or does not exist).
+    pub fn link_target(&self, rel: &Path) -> io::Result<Option<PathBuf>> {
+        let (parent, name) = match self.parent(rel, false) {
+            Ok(x) => x,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstatat(parent.as_raw_fd(), name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) } != 0 || st.st_mode & libc::S_IFMT != libc::S_IFLNK {
+            return Ok(None);
+        }
+        let mut buf = vec![0u8; libc::PATH_MAX as usize];
+        let n = unsafe { libc::readlinkat(parent.as_raw_fd(), name.as_ptr(), buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
+        if n < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        buf.truncate(n as usize);
+        Ok(Some(PathBuf::from(std::ffi::OsString::from_vec(buf))))
+    }
+
+    /// Create a symbolic link `rel` → `target` (the target is stored, not resolved).
+    pub fn symlink(&self, rel: &Path, target: &Path) -> io::Result<()> {
+        let (parent, name) = self.parent(rel, true)?;
+        let t = cstr(target)?;
+        check(unsafe { libc::symlinkat(t.as_ptr(), parent.as_raw_fd(), name.as_ptr()) })
     }
 
     /// Is `rel` an existing directory (not a symlink to one)?

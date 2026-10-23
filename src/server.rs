@@ -71,8 +71,8 @@ pub fn describe(op: &Op) -> String {
         Op::CleanBuildDirs => "clean leftover build directories".into(),
         Op::Remount { target, rw } => format!("remount {target} {}", if *rw { "rw" } else { "ro" }),
         Op::Begin { label } => format!("begin: {label}"),
-        Op::Commit { tx } => format!("commit {tx}"),
-        Op::Rollback { tx, force } => format!("undo {tx}{}", if *force { " (forced)" } else { "" }),
+        Op::Commit { transaction } => format!("commit {transaction}"),
+        Op::Rollback { transaction, force } => format!("undo {transaction}{}", if *force { " (forced)" } else { "" }),
     };
     if s.len() > 600 {
         let mut cut = 600;
@@ -109,7 +109,7 @@ impl Server {
         let sink = if matches!(op, Op::Ping) {
             sink
         } else {
-            self.audit.log(Record { id, event: "request".into(), tx: tx.clone(), what: describe(&op), ..Default::default() });
+            self.audit.log(Record { id, event: "request".into(), op: crate::audit::op_name(&op), tx: tx.clone(), what: describe(&op), ..Default::default() });
             self.audited(id, tx.clone(), sink)
         };
         let reply = |r: Result<(), String>| {
@@ -186,8 +186,8 @@ impl Server {
                 }
                 Err(e) => reply(Err(format!("cannot start a transaction: {e}"))),
             },
-            Op::Commit { tx: t } => reply(self.commit(id, &t)),
-            Op::Rollback { tx: t, force } => match self.journal.rollback(&t, force, &|p| self.confine(p)) {
+            Op::Commit { transaction: t } => reply(self.commit(id, &t)),
+            Op::Rollback { transaction: t, force } => match self.journal.rollback(&t, force, &|p| self.confine(p)) {
                 Ok((m, done)) => {
                     for text in &done {
                         sink(Event::Line { id, stream: StreamKind::Stdout, text: text.clone() });

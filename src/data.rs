@@ -33,6 +33,7 @@ pub struct Data {
     pub masks: Option<Arc<MaskDb>>,
     pub kernels: Option<Arc<crate::portage::kernel::KernelState>>,
     pub leftovers: Option<Arc<crate::portage::cleanup::Leftovers>>,
+    pub audit: Option<Arc<crate::changes::ChangeLog>>,
 }
 
 impl Data {
@@ -67,6 +68,8 @@ pub enum Reload {
     Masks,
     Kernels,
     Leftovers,
+    /// The helper's audit log (admin change history).
+    Audit,
 }
 
 pub enum DataMsg {
@@ -85,6 +88,7 @@ pub enum DataMsg {
     Masks(Arc<MaskDb>),
     Kernels(Arc<crate::portage::kernel::KernelState>),
     Leftovers(Arc<crate::portage::cleanup::Leftovers>),
+    Audit(Arc<crate::changes::ChangeLog>),
     Detail(String, Arc<PkgDetail>),
     Ebuild(PathBuf, Arc<String>),
 }

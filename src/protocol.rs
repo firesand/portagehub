@@ -22,7 +22,7 @@ impl Request {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
     Ping,
@@ -99,13 +99,14 @@ pub enum Op {
         label: String,
     },
     /// Close a transaction: its changes stay and can be undone later.
+    /// (`transaction`, not `tx`: the request's own `tx` field shares the JSON object.)
     Commit {
-        tx: String,
+        transaction: String,
     },
     /// Restore every file a transaction changed. For a committed transaction
     /// this is refused when one of its files was changed since, unless `force`.
     Rollback {
-        tx: String,
+        transaction: String,
         #[serde(default)]
         force: bool,
     },
@@ -372,5 +373,10 @@ mod tests {
         let back: Request = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
         assert_eq!(back.tx.as_deref(), Some("1-2"));
         assert_eq!(Op::Begin { label: String::new() }.min_helper(), (0, 4));
+        // The request's `tx` and the operation's fields share one JSON object.
+        let r = Request { id: 9, tx: Some("a".into()), op: Op::Rollback { transaction: "b".into(), force: true } };
+        let back: Request = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(back.tx.as_deref(), Some("a"));
+        assert_eq!(back.op, Op::Rollback { transaction: "b".into(), force: true });
     }
 }

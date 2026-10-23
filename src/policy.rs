@@ -9,8 +9,24 @@ pub fn env_allowed(key: &str) -> bool {
     ENV_ALLOWED.contains(&key)
 }
 
-/// emerge options that redirect where Portage reads configuration or installs.
-const EMERGE_DENIED: &[&str] = &["--config-root", "--root", "--sysroot", "--prefix"];
+/// Options of Portage's Python tools that point them at other configuration,
+/// repositories or install roots.
+const DENIED_OPTIONS: &[&str] = &["--config-root", "--root", "--sysroot", "--prefix", "--repositories-configuration", "--portdir", "--portdir-overlay", "--cache-dir"];
+/// Real options that happen to be prefixes of a denied one (argparse prefers exact matches).
+const EXACT_OK: &[&str] = &["--config", "--repo"];
+
+/// argparse accepts any unambiguous prefix of a long option (`--sysr=/x` is
+/// `--sysroot=/x`), so a prefix of a denied option is denied too.
+fn denied_option(a: &str) -> Option<&str> {
+    if !a.starts_with("--") || a.len() < 3 {
+        return None;
+    }
+    let opt = a.split('=').next().unwrap_or(a);
+    if EXACT_OK.contains(&opt) {
+        return None;
+    }
+    DENIED_OPTIONS.iter().any(|d| d.starts_with(opt)).then_some(opt)
+}
 
 fn looks_like_path(a: &str) -> bool {
     a.starts_with('/') || a.starts_with("./") || a.starts_with("../") || a.starts_with('~') || a == "." || a == ".." || a.contains("/../")
@@ -18,13 +34,17 @@ fn looks_like_path(a: &str) -> bool {
 
 /// Validate the arguments for an allowed program. `program` is the basename.
 pub fn check_args(program: &str, args: &[String]) -> Result<(), String> {
+    if let Some(a) = args.iter().find(|a| a.contains(['\n', '\0'])) {
+        return Err(format!("argument not allowed: {a:?}"));
+    }
+    if program != "eselect"
+        && let Some(opt) = args.iter().find_map(|a| denied_option(a))
+    {
+        return Err(format!("{program} option not allowed: {opt}"));
+    }
     match program {
         "emerge" => {
             for a in args {
-                let opt = a.split('=').next().unwrap_or(a);
-                if EMERGE_DENIED.contains(&opt) {
-                    return Err(format!("emerge option not allowed: {opt}"));
-                }
                 if looks_like_path(a) {
                     return Err(format!("emerge path arguments are not allowed: {a}"));
                 }
@@ -109,6 +129,13 @@ mod tests {
         assert!(check_args("emerge", &v(&["/home/u/evil.ebuild"])).is_err());
         assert!(check_args("emerge", &v(&["./evil.tbz2"])).is_err());
         assert!(check_args("emerge", &v(&["--usepkg-exclude=/tmp/x"])).is_err());
+        // Abbreviations argparse would expand to a denied option.
+        for a in ["--sysr=tmp/x", "--config-r=tmp/x", "--roo=x", "--pref", "--config-ro", "--repositories-conf=[x]"] {
+            assert!(check_args("emerge", &v(&[a, "--info"])).is_err(), "{a}");
+        }
+        assert!(check_args("emerge", &v(&["--root-deps=rdeps", "@world"])).is_ok());
+        assert!(check_args("emerge", &v(&["--pretend", "--prune", "x/y"])).is_ok());
+        assert!(check_args("emerge", &v(&["--info\n--root=/x"])).is_err());
     }
 
     #[test]
@@ -135,6 +162,8 @@ mod tests {
         assert!(check_args("eclean-dist", &v(&["--deep"])).is_ok());
         assert!(check_args("egencache", &v(&["--update", "--repo=guru", "--jobs=8"])).is_ok());
         assert!(check_args("egencache", &v(&["--cache-dir=/tmp/x"])).is_err());
+        assert!(check_args("egencache", &v(&["--update", "--repositories-configuration=[x]"])).is_err());
+        assert!(check_args("egencache", &v(&["--portdir-o=x"])).is_err());
         assert!(env_allowed("FEATURES") && env_allowed("MAKEOPTS"));
         for k in ["PORTAGE_CONFIGROOT", "ROOT", "EMERGE_DEFAULT_OPTS", "USE", "LD_PRELOAD", "PORTAGE_BASHRC", "PATH"] {
             assert!(!env_allowed(k), "{k}");

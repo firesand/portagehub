@@ -38,6 +38,8 @@ pub enum Prior {
     Absent,
     /// The directory was created by the transaction (rollback removes it if empty).
     DirCreated,
+    /// A symbolic link to `link` (recreated as it was, never followed).
+    Symlink,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +51,8 @@ pub struct Entry {
     pub saved: Option<String>,
     #[serde(default)]
     pub mode: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
     /// Content hash right after commit (None: absent), to detect later edits before an undo.
     #[serde(default)]
     pub after: Option<Option<u64>>,
@@ -89,6 +93,9 @@ fn fnv(data: &[u8]) -> u64 {
 }
 
 fn current_hash(base: &Beneath, rel: &Path) -> io::Result<Option<u64>> {
+    if let Some(t) = base.link_target(rel)? {
+        return Ok(Some(fnv(format!("link:{}", t.display()).as_bytes())));
+    }
     if base.is_dir(rel)? {
         return Ok(Some(0));
     }
@@ -163,15 +170,20 @@ impl Journal {
         if m.entries.iter().any(|e| e.path == logical) {
             return Ok(());
         }
+        if let Some(target) = base.link_target(rel)? {
+            let link = Some(target.to_string_lossy().into_owned());
+            m.entries.push(Entry { path: logical.to_string(), prior: Prior::Symlink, saved: None, mode: 0, link, after: None });
+            return self.save(&m);
+        }
         let entry = match base.read_with_mode(rel)? {
             Some((content, mode)) => {
                 let n = format!("files/{}", m.entries.len());
                 let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(self.tx_dir(tx)?.join(&n))?;
                 io::Write::write_all(&mut f, &content)?;
                 f.sync_all()?;
-                Entry { path: logical.to_string(), prior: Prior::File, saved: Some(n), mode, after: None }
+                Entry { path: logical.to_string(), prior: Prior::File, saved: Some(n), mode, link: None, after: None }
             }
-            None => Entry { path: logical.to_string(), prior: Prior::Absent, saved: None, mode: 0, after: None },
+            None => Entry { path: logical.to_string(), prior: Prior::Absent, saved: None, mode: 0, link: None, after: None },
         };
         m.entries.push(entry);
         self.save(&m)
@@ -181,7 +193,7 @@ impl Journal {
         let _g = self.lock.lock().unwrap();
         let mut m = self.open_tx(tx)?;
         if !m.entries.iter().any(|e| e.path == logical) {
-            m.entries.push(Entry { path: logical.to_string(), prior: Prior::DirCreated, saved: None, mode: 0, after: None });
+            m.entries.push(Entry { path: logical.to_string(), prior: Prior::DirCreated, saved: None, mode: 0, link: None, after: None });
             self.save(&m)?;
         }
         Ok(())
@@ -236,6 +248,15 @@ impl Journal {
                     let mut f = std::fs::File::open(self.tx_dir(tx)?.join(e.saved.as_deref().unwrap_or("")))?;
                     base.write_atomic_from(&rel, &mut f, Some(e.mode))?;
                     done.push(format!("restored {}", e.path));
+                }
+                Prior::Symlink => {
+                    if base.is_dir(&rel)? {
+                        base.rmdir(&rel)?;
+                    } else if base.exists(&rel)? {
+                        base.unlink(&rel)?;
+                    }
+                    base.symlink(&rel, Path::new(e.link.as_deref().unwrap_or("")))?;
+                    done.push(format!("restored link {}", e.path));
                 }
                 Prior::Absent => {
                     if base.is_dir(&rel)? {
@@ -346,6 +367,22 @@ mod tests {
         assert!(!d.join("etc/portage/package.use/zz").exists());
         assert!(j.begin("x").is_ok());
         assert!(j.get("../../etc").is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn symlinks_are_recorded_and_restored_as_links() {
+        let d = scratch("link");
+        std::os::unix::fs::symlink("../../elsewhere/use", d.join("etc/portage/package.use/linked")).unwrap();
+        let j = Journal::new(&d);
+        let b = Beneath::open(&d.join("etc/portage")).unwrap();
+        let r = resolver(&d);
+        let tx = j.begin("replace link").unwrap();
+        j.record(&tx, "/etc/portage/package.use/linked", &b, Path::new("package.use/linked")).unwrap();
+        b.write_atomic(Path::new("package.use/linked"), b"now a file").unwrap();
+        j.commit(&tx, &r).unwrap();
+        j.rollback(&tx, false, &r).unwrap();
+        assert_eq!(std::fs::read_link(d.join("etc/portage/package.use/linked")).unwrap(), Path::new("../../elsewhere/use"));
         let _ = std::fs::remove_dir_all(&d);
     }
 

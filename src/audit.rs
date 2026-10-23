@@ -13,8 +13,11 @@ pub struct Record {
     /// The user whose session made the request (PKEXEC_UID / SUDO_UID).
     pub uid: u32,
     pub id: u64,
-    /// "request" or "done"
+    /// "request", "done", "begin", "commit" or "rollback".
     pub event: String,
+    /// Operation name (`write_file`, `run`, …) on "request" records.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub op: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tx: Option<String>,
     /// Short description of the operation (never file contents).
@@ -47,9 +50,15 @@ pub fn session_uid() -> u32 {
         .unwrap_or_else(|| unsafe { libc::getuid() })
 }
 
+/// The log is rotated to `audit.log.1` when it grows past this.
+const ROTATE_BYTES: u64 = 8 << 20;
+
 impl Audit {
     pub fn open(root: &Path) -> Audit {
         let path = path_for(root);
+        if std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file() && m.len() > ROTATE_BYTES) {
+            let _ = std::fs::rename(&path, path.with_extension("log.1"));
+        }
         let file = path.parent().and_then(|d| std::fs::DirBuilder::new().recursive(true).mode(0o755).create(d).ok()).and_then(|_| {
             std::fs::OpenOptions::new().append(true).create(true).mode(0o644).custom_flags(libc::O_NOFOLLOW).open(&path).ok()
         });
@@ -72,7 +81,14 @@ impl Audit {
     }
 }
 
-/// Parse the log (newest last). Unparseable lines are skipped.
-pub fn read(path: &Path) -> Vec<Record> {
-    std::fs::read_to_string(path).unwrap_or_default().lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
+/// Parse the log (oldest first). Unparseable lines are skipped; None when it
+/// cannot be read (not created yet, or no permission).
+pub fn read(path: &Path) -> Option<Vec<Record>> {
+    let text = std::fs::read_to_string(path).ok()?;
+    Some(text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect())
+}
+
+/// The operation's name as it appears in the protocol (`write_file`, `run`, …).
+pub fn op_name(op: &crate::protocol::Op) -> String {
+    serde_json::to_value(op).ok().and_then(|v| v.get("op").and_then(|o| o.as_str()).map(String::from)).unwrap_or_default()
 }

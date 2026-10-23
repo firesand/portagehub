@@ -30,6 +30,9 @@ fn ppid_of(pid: i32) -> Option<i32> {
 
 /// The uid of the user who asked for root (set by pkexec, sudo or doas).
 fn requesting_uid() -> Option<u32> {
+    if unsafe { libc::geteuid() } != 0 {
+        return Some(unsafe { libc::getuid() });
+    }
     for k in ["PKEXEC_UID", "SUDO_UID"] {
         if let Some(u) = std::env::var(k).ok().and_then(|v| v.parse().ok()) {
             return Some(u);
@@ -41,7 +44,9 @@ fn requesting_uid() -> Option<u32> {
 }
 
 fn check_peer() -> Result<(), String> {
-    if unsafe { libc::geteuid() } != 0 {
+    // Unprivileged (tests, PORTAGEHUB_ELEVATE=none) the check is optional:
+    // PORTAGEHUB_STRICT_PEER=1 turns it on so it can be tested without root.
+    if unsafe { libc::geteuid() } != 0 && std::env::var_os("PORTAGEHUB_STRICT_PEER").is_none_or(|v| v != "1") {
         return Ok(());
     }
     let (Some(i), Some(o)) = (fstat(0), fstat(1)) else {
