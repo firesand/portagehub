@@ -58,6 +58,9 @@ pub struct Executor {
 }
 
 pub fn find_helper() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("PORTAGEHUB_HELPER").map(PathBuf::from).filter(|p| p.is_absolute() && p.is_file()) {
+        return Some(p);
+    }
     let mut cands = Vec::new();
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()

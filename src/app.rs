@@ -625,6 +625,7 @@ impl App {
             DataMsg::Kernels(k) => {
                 done(self, Reload::Kernels);
                 self.data.kernels = Some(k);
+                self.maintenance.show_nvidia_help = false;
                 if self.kernel_attention && !self.exec.root_ready() {
                     self.report_boot_check();
                 }
