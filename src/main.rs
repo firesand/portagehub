@@ -75,7 +75,17 @@ fn self_test() {
     }
     let t = std::time::Instant::now();
     let ks = portage::kernel::load(data.vdb.as_ref().unwrap(), "kernels-keep");
-    println!("kernels ({:?}): running {} · last-good {:?} · previous-good {:?} · bootloader {:?} (detected {:?}, current {:?}) · initramfs {:?}", t.elapsed(), ks.running, ks.last_good, ks.previous_good, ks.boot.primary, ks.boot.detected, ks.boot.current, ks.boot.initramfs_tool);
+    println!(
+        "kernels ({:?}): running {} · last-good {:?} · previous-good {:?} · bootloader {:?} (detected {:?}, current {:?}) · initramfs {:?}",
+        t.elapsed(),
+        ks.running,
+        ks.last_good,
+        ks.previous_good,
+        ks.boot.primary,
+        ks.boot.detected,
+        ks.boot.current,
+        ks.boot.initramfs_tool
+    );
     for k in &ks.kernels {
         println!(
             "  {:<22} pkg={:<38} image={} initramfs={} modules={} sources={} old={} nvidia={:?}",
@@ -89,7 +99,10 @@ fn self_test() {
             ks.nvidia_status(k)
         );
     }
-    println!("  orphan kernel packages: {:?} · keep set {:?} in world: {} · nvidia {:?}", ks.orphan_packages, ks.keep_set_atoms, ks.keep_set_in_world, ks.nvidia);
+    println!(
+        "  orphan kernel packages: {:?} · keep set {:?} in world: {} · nvidia {:?}",
+        ks.orphan_packages, ks.keep_set_atoms, ks.keep_set_in_world, ks.nvidia
+    );
     for f in portage::kernel::check(&ks, None, true, 2, true) {
         println!("  [{:?}] {} — {}", f.severity, f.title, f.detail);
     }
@@ -98,7 +111,14 @@ fn self_test() {
     println!("updates: {} ({:?})", u.len(), t.elapsed());
     for c in u.iter() {
         let held: Vec<String> = c.held_by.iter().map(|(p, a)| format!("{p} needs {a}")).collect();
-        println!("  {} {} -> {} ::{}{}", c.key, c.installed, c.available, c.repo, if held.is_empty() { String::new() } else { format!("   [held back: {}]", held.join("; ")) });
+        println!(
+            "  {} {} -> {} ::{}{}",
+            c.key,
+            c.installed,
+            c.available,
+            c.repo,
+            if held.is_empty() { String::new() } else { format!("   [held back: {}]", held.join("; ")) }
+        );
     }
 }
 
@@ -111,7 +131,13 @@ fn boot_check_cli(path: &str) {
         .lines()
         .find_map(|l| {
             let v: serde_json::Value = serde_json::from_str(l).ok()?;
-            if v.get("ev").and_then(|e| e.as_str()) == Some("data") { v.get("text").and_then(|t| t.as_str()).map(String::from) } else if v.get("files").is_some() { Some(l.to_string()) } else { None }
+            if v.get("ev").and_then(|e| e.as_str()) == Some("data") {
+                v.get("text").and_then(|t| t.as_str()).map(String::from)
+            } else if v.get("files").is_some() {
+                Some(l.to_string())
+            } else {
+                None
+            }
         })
         .unwrap_or(text);
     let scan: portagehub::protocol::BootScan = match serde_json::from_str(&json) {

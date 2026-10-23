@@ -180,12 +180,7 @@ pub fn scan(repos: &ReposConf) -> Catalog {
         }
     }
     // Packages only present in repos without pkg_desc_index: read their cache.
-    let missing: Vec<usize> = pkgs
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| p.desc.is_empty())
-        .map(|(i, _)| i)
-        .collect();
+    let missing: Vec<usize> = pkgs.iter().enumerate().filter(|(_, p)| p.desc.is_empty()).map(|(i, _)| i).collect();
     let locs = &cat.repo_locations;
     let filled: Vec<(usize, String)> = std::thread::scope(|s| {
         let chunk = missing.len().div_ceil(threads).max(1);

@@ -65,10 +65,7 @@ pub struct Atom {
 }
 
 fn valid_name(s: &str) -> bool {
-    !s.is_empty()
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || "+_.-".contains(c))
-        && !s.starts_with('-')
-        && !s.starts_with('.')
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "+_.-".contains(c)) && !s.starts_with('-') && !s.starts_with('.')
 }
 
 impl Atom {
@@ -102,11 +99,7 @@ impl Atom {
         let mut use_deps = Vec::new();
         if s.ends_with(']') {
             let open = s.find('[')?;
-            use_deps = s[open + 1..s.len() - 1]
-                .split(',')
-                .map(|x| x.trim().to_string())
-                .filter(|x| !x.is_empty())
-                .collect();
+            use_deps = s[open + 1..s.len() - 1].split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
             s = &s[..open];
         }
         let mut repo = None;

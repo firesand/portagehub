@@ -21,7 +21,8 @@ pub enum Show {
     Changes,
 }
 
-const PAGES: &[(Show, &str)] = &[(Show::All, "Merges"), (Show::Failed, "Failures"), (Show::Unmerges, "Removals"), (Show::Sessions, "Commands"), (Show::Changes, "PortageHub changes")];
+const PAGES: &[(Show, &str)] =
+    &[(Show::All, "Merges"), (Show::Failed, "Failures"), (Show::Unmerges, "Removals"), (Show::Sessions, "Commands"), (Show::Changes, "PortageHub changes")];
 
 #[derive(Default)]
 pub struct State {
@@ -83,13 +84,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     let q = app.history_view.query.to_lowercase();
     egui::Frame::new().inner_margin(Margin::symmetric(24, 0)).show(ui, |ui| match app.history_view.show {
         Show::All | Show::Failed => {
-            let rows: Vec<_> = h
-                .merges
-                .iter()
-                .rev()
-                .filter(|m| app.history_view.show == Show::All || !m.ok)
-                .filter(|m| q.is_empty() || m.cpv.contains(&q))
-                .collect();
+            let rows: Vec<_> =
+                h.merges.iter().rev().filter(|m| app.history_view.show == Show::All || !m.ok).filter(|m| q.is_empty() || m.cpv.contains(&q)).collect();
             egui::ScrollArea::vertical().id_salt("hist").auto_shrink([false, false]).show_rows(ui, 26.0, rows.len(), |ui, range| {
                 for m in &rows[range] {
                     ui.horizontal(|ui| {
@@ -245,7 +241,14 @@ fn undo_dialogs(app: &mut App, ctx: &egui::Context) {
             ui.set_width(520.0);
             w::title(ui, "Undo this change?");
             w::subtitle(ui, &label);
-            ui.label(RichText::new(if files.is_empty() { "Every file this change touched gets its previous contents back.".to_string() } else { "These files get their previous contents back (files the change created are removed):".to_string() }).color(TEXT));
+            ui.label(
+                RichText::new(if files.is_empty() {
+                    "Every file this change touched gets its previous contents back.".to_string()
+                } else {
+                    "These files get their previous contents back (files the change created are removed):".to_string()
+                })
+                .color(TEXT),
+            );
             for f in files.iter().take(12) {
                 ui.label(w::mono(f.as_str()));
             }
@@ -272,7 +275,16 @@ fn undo_dialogs(app: &mut App, ctx: &egui::Context) {
                 ui.label(RichText::new(icon::WARNING).size(22.0).color(ORANGE));
                 w::title(ui, "Files changed since then");
             });
-            ui.add(egui::Label::new(RichText::new(format!("{msg}.\nUndoing anyway replaces those later edits with the contents from before “{}”.", title.trim_start_matches("Undo: "))).color(TEXT)).wrap());
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!(
+                        "{msg}.\nUndoing anyway replaces those later edits with the contents from before “{}”.",
+                        title.trim_start_matches("Undo: ")
+                    ))
+                    .color(TEXT),
+                )
+                .wrap(),
+            );
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if w::danger(ui, icon::ARROW_COUNTER_CLOCKWISE, "Undo anyway").clicked() {
@@ -318,7 +330,10 @@ fn chart(ui: &mut Ui, h: &crate::portage::history::History) {
     let mut hovered = None;
     for (i, b) in buckets.iter().enumerate() {
         let hgt = (*b as f32 / max) * (rect.height() - 14.0);
-        let r = egui::Rect::from_min_max(egui::pos2(rect.left() + i as f32 * bw + 1.0, rect.bottom() - 4.0 - hgt), egui::pos2(rect.left() + (i + 1) as f32 * bw - 1.0, rect.bottom() - 4.0));
+        let r = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + i as f32 * bw + 1.0, rect.bottom() - 4.0 - hgt),
+            egui::pos2(rect.left() + (i + 1) as f32 * bw - 1.0, rect.bottom() - 4.0),
+        );
         let hover = resp.hover_pos().is_some_and(|pos| pos.x >= r.left() - 1.0 && pos.x <= r.right() + 1.0);
         if hover {
             hovered = Some((i, *b));

@@ -7,8 +7,15 @@ use std::collections::HashSet;
 #[derive(Debug, Clone)]
 pub enum DepNode {
     /// A leaf token; `atom` is filled in when the token parses as an atom.
-    Leaf { text: String, atom: Option<Atom> },
-    UseCond { flag: String, negate: bool, children: Vec<DepNode> },
+    Leaf {
+        text: String,
+        atom: Option<Atom>,
+    },
+    UseCond {
+        flag: String,
+        negate: bool,
+        children: Vec<DepNode>,
+    },
     AnyOf(Vec<DepNode>),
     ExactlyOne(Vec<DepNode>),
     AtMostOne(Vec<DepNode>),
@@ -87,9 +94,7 @@ pub fn collect_atoms<'a>(nodes: &'a [DepNode], enabled: Option<&HashSet<String>>
                     collect_atoms(children, enabled, out);
                 }
             }
-            DepNode::AnyOf(c) | DepNode::ExactlyOne(c) | DepNode::AtMostOne(c) | DepNode::All(c) => {
-                collect_atoms(c, enabled, out)
-            }
+            DepNode::AnyOf(c) | DepNode::ExactlyOne(c) | DepNode::AtMostOne(c) | DepNode::All(c) => collect_atoms(c, enabled, out),
         }
     }
 }
@@ -123,9 +128,7 @@ pub fn collect_leaves(nodes: &[DepNode], enabled: Option<&HashSet<String>>, out:
                     collect_leaves(children, enabled, out);
                 }
             }
-            DepNode::AnyOf(c) | DepNode::ExactlyOne(c) | DepNode::AtMostOne(c) | DepNode::All(c) => {
-                collect_leaves(c, enabled, out)
-            }
+            DepNode::AnyOf(c) | DepNode::ExactlyOne(c) | DepNode::AtMostOne(c) | DepNode::All(c) => collect_leaves(c, enabled, out),
         }
     }
 }

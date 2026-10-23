@@ -61,11 +61,7 @@ pub fn spawn_streaming(
     sink: Arc<dyn Fn(Event) + Send + Sync>,
 ) -> std::io::Result<u32> {
     let mut cmd = Command::new(program);
-    cmd.args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+    cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
     for (k, v) in env {
         cmd.env(k, v);
     }

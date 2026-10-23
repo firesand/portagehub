@@ -244,15 +244,38 @@ pub enum Event {
         version: Option<String>,
     },
     /// Structured result of a request (JSON text).
-    Data { id: u64, text: String },
-    Started { id: u64, pid: u32 },
+    Data {
+        id: u64,
+        text: String,
+    },
+    Started {
+        id: u64,
+        pid: u32,
+    },
     /// A complete output line (ANSI escapes removed).
-    Line { id: u64, stream: StreamKind, text: String },
+    Line {
+        id: u64,
+        stream: StreamKind,
+        text: String,
+    },
     /// A carriage-return terminated partial line (progress meters).
-    Partial { id: u64, stream: StreamKind, text: String },
-    Exit { id: u64, code: Option<i32>, signal: Option<i32> },
-    Ok { id: u64 },
-    Err { id: u64, msg: String },
+    Partial {
+        id: u64,
+        stream: StreamKind,
+        text: String,
+    },
+    Exit {
+        id: u64,
+        code: Option<i32>,
+        signal: Option<i32>,
+    },
+    Ok {
+        id: u64,
+    },
+    Err {
+        id: u64,
+        msg: String,
+    },
 }
 
 impl Event {

@@ -48,12 +48,7 @@ const EFI_DIRS: &[&str] = &["/boot/efi/EFI", "/efi/EFI", "/boot/EFI"];
 const LIST_DIRS: &[&str] = &["/boot", "/boot/kernel-backup", "/boot/efi/EFI/Linux", "/efi/EFI/Linux", "/boot/EFI/Linux", "/boot/efi/EFI", "/efi/EFI"];
 
 fn mtime(p: &Path) -> i64 {
-    std::fs::metadata(p)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    std::fs::metadata(p).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
 fn list(root: &Path, dir: &Path) -> Option<Listing> {
@@ -202,7 +197,8 @@ pub fn mark_good(root: &Path, kver: &str, state_dir: &str, backup: bool, log: &d
     log(format!("last-good = {kver}"));
     if backup {
         let boot = Beneath::open(&at(root, "/boot")).map_err(io_err("/boot"))?;
-        for f in [format!("vmlinuz-{kver}"), format!("kernel-{kver}"), format!("initramfs-{kver}.img"), format!("config-{kver}"), format!("System.map-{kver}")] {
+        for f in [format!("vmlinuz-{kver}"), format!("kernel-{kver}"), format!("initramfs-{kver}.img"), format!("config-{kver}"), format!("System.map-{kver}")]
+        {
             let Some(mut src) = boot.open_file(Path::new(&f)).map_err(io_err(format!("/boot/{f}")))? else { continue };
             let dst = Path::new("kernel-backup").join(kver).join(&f);
             boot.write_atomic_from(&dst, &mut src, None).map_err(io_err(format!("/boot/{}", dst.display())))?;

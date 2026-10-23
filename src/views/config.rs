@@ -72,11 +72,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         w::loading(ui, "Reading /etc/portage…");
         return;
     };
-    egui::Panel::left("cfg-side")
-        .resizable(true)
-        .default_size(270.0)
-        .frame(egui::Frame::new().fill(SIDEBAR).inner_margin(Margin::symmetric(0, 8)))
-        .show(ui, |ui| {
+    egui::Panel::left("cfg-side").resizable(true).default_size(270.0).frame(egui::Frame::new().fill(SIDEBAR).inner_margin(Margin::symmetric(0, 8))).show(
+        ui,
+        |ui| {
             egui::ScrollArea::vertical().id_salt("cfg-side-scroll").show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 if w::side_item(ui, icon::HOUSE, "Overview", app.config_view.page == Page::Overview, None).clicked() {
@@ -125,7 +123,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     app.config_view.page = Page::Strays;
                 }
             });
-        });
+        },
+    );
     egui::CentralPanel::default().frame(egui::Frame::new().fill(BG)).show(ui, |ui| match app.config_view.page {
         Page::Overview => overview(app, ui),
         Page::Kind(k) => kind_page(app, ui, k),
@@ -154,7 +153,12 @@ fn overview(app: &mut App, ui: &mut Ui) {
         w::subtitle(ui, "Everything below /etc/portage that shapes how Portage builds and selects packages.");
         ui.add_space(8.0);
         if !cfg.strays.is_empty() {
-            w::callout(ui, ORANGE, icon::WARNING, &format!("{} file(s) in /etc/portage are ignored by Portage because of their name. Open “Stray files” to fix them.", cfg.strays.len()));
+            w::callout(
+                ui,
+                ORANGE,
+                icon::WARNING,
+                &format!("{} file(s) in /etc/portage are ignored by Portage because of their name. Open “Stray files” to fix them.", cfg.strays.len()),
+            );
             ui.add_space(6.0);
         }
         let per_row = ((ui.available_width() + 10.0) / 330.0).floor().max(1.0) as usize;
@@ -223,8 +227,16 @@ fn kind_page(app: &mut App, ui: &mut Ui, kind: ConfKind) {
                 ui.label(w::dim(format!("{} files — Portage reads them all in alphabetical order", set.files.len())));
             } else {
                 w::badge(ui, "SINGLE FILE", Color32::from_rgb(0x2b, 0x1a, 0x00), ORANGE);
-                if w::button(ui, icon::FOLDER_PLUS, "Convert to directory").on_hover_text(format!("Moves the file to {}/main so you can split settings into several files", set.base.display())).clicked() {
-                    app.push(Action::Batch { title: format!("Convert {} to a directory", kind.file_name()), ops: edits::convert_to_dir_ops(&set.base), reload: vec![Reload::Config], then: None });
+                if w::button(ui, icon::FOLDER_PLUS, "Convert to directory")
+                    .on_hover_text(format!("Moves the file to {}/main so you can split settings into several files", set.base.display()))
+                    .clicked()
+                {
+                    app.push(Action::Batch {
+                        title: format!("Convert {} to a directory", kind.file_name()),
+                        ops: edits::convert_to_dir_ops(&set.base),
+                        reload: vec![Reload::Config],
+                        then: None,
+                    });
                 }
             }
             if kind == ConfKind::Keywords && set.entry_count() > 0 {
@@ -269,7 +281,12 @@ fn kind_page(app: &mut App, ui: &mut Ui, kind: ConfKind) {
                 }
                 if set.is_dir && w::button(ui, icon::TRASH, "Delete this file").clicked() {
                     let old = set.file(&fp).map(|f| f.raw.clone()).unwrap_or_default();
-                    app.push(Action::Write { title: format!("Delete {}", fp.display()), changes: vec![FileChange { path: fp.clone(), old, new: None }], reload: vec![Reload::Config], then: None });
+                    app.push(Action::Write {
+                        title: format!("Delete {}", fp.display()),
+                        changes: vec![FileChange { path: fp.clone(), old, new: None }],
+                        reload: vec![Reload::Config],
+                        then: None,
+                    });
                     app.config_view.file_filter = None;
                 }
             }
@@ -290,7 +307,12 @@ fn kind_page(app: &mut App, ui: &mut Ui, kind: ConfKind) {
                     if !new.ends_with('\n') {
                         new.push('\n');
                     }
-                    app.push(Action::Write { title: format!("Edit {}", path.display()), changes: vec![FileChange { path: path.clone(), old, new: Some(new) }], reload: vec![Reload::Config], then: None });
+                    app.push(Action::Write {
+                        title: format!("Edit {}", path.display()),
+                        changes: vec![FileChange { path: path.clone(), old, new: Some(new) }],
+                        reload: vec![Reload::Config],
+                        then: None,
+                    });
                     close = true;
                 }
                 if w::button(ui, "", "Close editor").clicked() {
@@ -316,11 +338,8 @@ fn entries_table(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
         {
             continue;
         }
-        let entries: Vec<(usize, Entry)> = f
-            .entries()
-            .filter(|(_, e)| filter.is_empty() || e.render().to_lowercase().contains(&filter))
-            .map(|(i, e)| (i, e.clone()))
-            .collect();
+        let entries: Vec<(usize, Entry)> =
+            f.entries().filter(|(_, e)| filter.is_empty() || e.render().to_lowercase().contains(&filter)).map(|(i, e)| (i, e.clone())).collect();
         if entries.is_empty() {
             continue;
         }
@@ -342,11 +361,19 @@ fn entries_table(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         let mut on = !e.disabled;
-                        if w::toggle(ui, &mut on).on_hover_text(if on { "Active — switch off to comment it out" } else { "Commented out — switch on to activate" }).changed() {
+                        if w::toggle(ui, &mut on)
+                            .on_hover_text(if on { "Active — switch off to comment it out" } else { "Commented out — switch on to activate" })
+                            .changed()
+                        {
                             let mut ne = e.clone();
                             ne.disabled = !on;
                             let ch = edits::replace_entry(&cfg, &f.path, idx, Some(ne));
-                            app.push(Action::Write { title: format!("{} {}", if on { "Enable" } else { "Disable" }, e.atom_text), changes: vec![ch], reload: vec![Reload::Config], then: None });
+                            app.push(Action::Write {
+                                title: format!("{} {}", if on { "Enable" } else { "Disable" }, e.atom_text),
+                                changes: vec![ch],
+                                reload: vec![Reload::Config],
+                                then: None,
+                            });
                         }
                         if editing {
                             let text = &mut app.config_view.editing.as_mut().unwrap().2;
@@ -359,7 +386,12 @@ fn entries_table(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
                                     ne.comment = e.comment.clone();
                                     ne.disabled = e.disabled;
                                     let ch = edits::replace_entry(&cfg, &f.path, idx, Some(ne));
-                                    app.push(Action::Write { title: format!("Edit {}", e.atom_text), changes: vec![ch], reload: vec![Reload::Config], then: None });
+                                    app.push(Action::Write {
+                                        title: format!("Edit {}", e.atom_text),
+                                        changes: vec![ch],
+                                        reload: vec![Reload::Config],
+                                        then: None,
+                                    });
                                 }
                             }
                             if w::button(ui, "", "Cancel").clicked() {
@@ -370,7 +402,13 @@ fn entries_table(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
                         ui.vertical(|ui| {
                             ui.horizontal_wrapped(|ui| {
                                 let valid = e.atom.is_some() || e.atom_text.starts_with('@');
-                                let col = if e.disabled { TEXT_FAINT } else if valid { WHITE } else { RED };
+                                let col = if e.disabled {
+                                    TEXT_FAINT
+                                } else if valid {
+                                    WHITE
+                                } else {
+                                    RED
+                                };
                                 let r = ui.add(egui::Label::new(RichText::new(&e.atom_text).monospace().color(col)).sense(egui::Sense::click()));
                                 if !valid {
                                     r.clone().on_hover_text("Not a valid atom — Portage will warn about this line");
@@ -406,7 +444,12 @@ fn entries_table(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if w::icon_button(ui, icon::TRASH, "Delete line").clicked() {
                                 let ch = edits::replace_entry(&cfg, &f.path, idx, None);
-                                app.push(Action::Write { title: format!("Delete {}", e.atom_text), changes: vec![ch], reload: vec![Reload::Config], then: None });
+                                app.push(Action::Write {
+                                    title: format!("Delete {}", e.atom_text),
+                                    changes: vec![ch],
+                                    reload: vec![Reload::Config],
+                                    then: None,
+                                });
                             }
                             if w::icon_button(ui, icon::PENCIL_SIMPLE, "Edit line").clicked() {
                                 let mut t = e.atom_text.clone();
@@ -423,7 +466,12 @@ fn entries_table(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
         }
     }
     if !any {
-        w::empty_state(ui, kind.icon(), "No entries", if filter.is_empty() { "Use “Add an entry” to create the first one." } else { "Nothing matches the filter." });
+        w::empty_state(
+            ui,
+            kind.icon(),
+            "No entries",
+            if filter.is_empty() { "Use “Add an entry” to create the first one." } else { "Nothing matches the filter." },
+        );
     }
 }
 
@@ -476,7 +524,16 @@ fn wizard(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
                 w::segmented(
                     ui,
                     &mut op,
-                    &[(AOp::Any, "Any"), (AOp::Eq, "="), (AOp::Ge, ">="), (AOp::Gt, ">"), (AOp::Le, "<="), (AOp::Lt, "<"), (AOp::Tilde, "~"), (AOp::EqGlob, "=…*")],
+                    &[
+                        (AOp::Any, "Any"),
+                        (AOp::Eq, "="),
+                        (AOp::Ge, ">="),
+                        (AOp::Gt, ">"),
+                        (AOp::Le, "<="),
+                        (AOp::Lt, "<"),
+                        (AOp::Tilde, "~"),
+                        (AOp::EqGlob, "=…*"),
+                    ],
                 );
                 wz.op = Some(op);
                 ui.label(w::dim(op.label()));
@@ -488,11 +545,13 @@ fn wizard(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
                             .and_then(|k| catalog.as_ref().and_then(|c| c.get(k)))
                             .map(|p| p.ebuilds.iter().rev().map(|e| e.ver.raw.clone()).collect())
                             .unwrap_or_default();
-                        egui::ComboBox::from_id_salt("wz-ver").selected_text(if wz.version.is_empty() { "pick version".to_string() } else { wz.version.clone() }).show_ui(ui, |ui| {
-                            for v in versions {
-                                ui.selectable_value(&mut wz.version, v.clone(), v);
-                            }
-                        });
+                        egui::ComboBox::from_id_salt("wz-ver")
+                            .selected_text(if wz.version.is_empty() { "pick version".to_string() } else { wz.version.clone() })
+                            .show_ui(ui, |ui| {
+                                for v in versions {
+                                    ui.selectable_value(&mut wz.version, v.clone(), v);
+                                }
+                            });
                         ui.add(egui::TextEdit::singleline(&mut wz.version).hint_text("or type").desired_width(120.0));
                     });
                 }
@@ -543,7 +602,13 @@ fn wizard(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
                             let toks: Vec<String> = wz.values.split_whitespace().map(String::from).collect();
                             let on = toks.contains(&s);
                             let off = toks.contains(&format!("-{s}"));
-                            let label = if on { s.clone() } else if off { format!("-{s}") } else { s.clone() };
+                            let label = if on {
+                                s.clone()
+                            } else if off {
+                                format!("-{s}")
+                            } else {
+                                s.clone()
+                            };
                             let r = w::chip(ui, &label, on || off);
                             if r.clicked() {
                                 let mut t: Vec<String> = toks.into_iter().filter(|x| x.trim_start_matches('-') != s).collect();
@@ -612,7 +677,13 @@ fn wizard(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
             };
         });
         let file_name = if wz.file.trim().is_empty() { app.settings.target_file.clone() } else { wz.file.trim().to_string() };
-        if ui.add_enabled(entry.atom.is_some(), egui::Button::new(RichText::new(format!("{}  Add entry", icon::PLUS)).color(WHITE)).fill(Color32::from_rgb(0x1f, 0x6f, 0xb2))).clicked() {
+        if ui
+            .add_enabled(
+                entry.atom.is_some(),
+                egui::Button::new(RichText::new(format!("{}  Add entry", icon::PLUS)).color(WHITE)).fill(Color32::from_rgb(0x1f, 0x6f, 0xb2)),
+            )
+            .clicked()
+        {
             let ch = edits::add_lines(&cfg, &[(kind, entry.render())], &file_name, None);
             app.push(Action::Write { title: format!("{}: {}", kind.file_name(), entry.render()), changes: ch, reload: vec![Reload::Config], then: None });
             app.config_view.wizard.values.clear();
@@ -632,10 +703,19 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
     common::page(ui, "makeconf", |ui| {
         w::title(ui, "make.conf");
         ui.label(w::mono(file.to_string_lossy()));
-        common::tip(app, ui, "The global build settings. The cards below edit the most common variables; every other variable is listed further down. Effective values include what your profile adds.");
+        common::tip(
+            app,
+            ui,
+            "The global build settings. The cards below edit the most common variables; every other variable is listed further down. Effective values include what your profile adds.",
+        );
         let mut set = |app: &mut App, name: &str, value: String| {
             let new = makeconf::set_var(&text, name, &value);
-            app.push(Action::Write { title: format!("Set {name} in make.conf"), changes: vec![FileChange { path: file.clone(), old: text.clone(), new: Some(new) }], reload: vec![Reload::MakeConf, Reload::Env], then: None });
+            app.push(Action::Write {
+                title: format!("Set {name} in make.conf"),
+                changes: vec![FileChange { path: file.clone(), old: text.clone(), new: Some(new) }],
+                reload: vec![Reload::MakeConf, Reload::Env],
+                then: None,
+            });
         };
         let editable = |name: &str| mc.last(name).is_none_or(|a| !a.self_ref && a.file == file);
 
@@ -694,7 +774,12 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
                 w::help(ui, makeconf::describe("ACCEPT_KEYWORDS"));
             });
             if sel != testing {
-                w::callout(ui, ORANGE, icon::WARNING, "Switching the whole system to testing upgrades many packages and is hard to undo. Most users accept testing keywords per package instead.");
+                w::callout(
+                    ui,
+                    ORANGE,
+                    icon::WARNING,
+                    "Switching the whole system to testing upgrades many packages and is hard to undo. Most users accept testing keywords per package instead.",
+                );
                 if ui.button(format!("Confirm: set ACCEPT_KEYWORDS=\"{}\"", if sel { format!("~{arch}") } else { arch.clone() })).clicked() {
                     set(app, "ACCEPT_KEYWORDS", if sel { format!("~{arch}") } else { arch.clone() });
                 }
@@ -707,7 +792,9 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
             ui.set_width(ui.available_width());
             let cur = mc.value("ACCEPT_LICENSE");
             ui.horizontal_wrapped(|ui| {
-                for (v, label) in [("-* @FREE", "Free software only"), ("-* @FREE @BINARY-REDISTRIBUTABLE", "Free + redistributable binaries"), ("*", "Accept everything")] {
+                for (v, label) in
+                    [("-* @FREE", "Free software only"), ("-* @FREE @BINARY-REDISTRIBUTABLE", "Free + redistributable binaries"), ("*", "Accept everything")]
+                {
                     if w::chip(ui, label, cur == v).on_hover_text(v).clicked() && cur != v && editable("ACCEPT_LICENSE") {
                         set(app, "ACCEPT_LICENSE", v.to_string());
                     }
@@ -729,7 +816,16 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
                     let neg = toks.iter().any(|t| *t == format!("-{f}"));
                     let eff = effective.split_whitespace().any(|t| t == *f);
                     let label = if neg { format!("-{f}") } else { f.to_string() };
-                    let r = w::chip(ui, &label, in_mc || (eff && !neg)).on_hover_text(format!("{help}\n{}", if in_mc { "set in make.conf" } else if eff { "enabled by default/profile" } else { "off" }));
+                    let r = w::chip(ui, &label, in_mc || (eff && !neg)).on_hover_text(format!(
+                        "{help}\n{}",
+                        if in_mc {
+                            "set in make.conf"
+                        } else if eff {
+                            "enabled by default/profile"
+                        } else {
+                            "off"
+                        }
+                    ));
                     if r.clicked() && editable("FEATURES") {
                         let mut t: Vec<String> = toks.iter().filter(|x| x.trim_start_matches('-') != *f).cloned().collect();
                         if !(in_mc || eff && !neg) {
@@ -783,7 +879,25 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
         w::card().show(ui, |ui| {
             ui.set_width(ui.available_width());
             for (var, opts) in [
-                ("VIDEO_CARDS", &["nvidia", "amdgpu", "radeonsi", "radeon", "intel", "nouveau", "virgl", "vmware", "qxl", "fbdev", "vesa", "lavapipe", "d3d12", "freedreno"][..]),
+                (
+                    "VIDEO_CARDS",
+                    &[
+                        "nvidia",
+                        "amdgpu",
+                        "radeonsi",
+                        "radeon",
+                        "intel",
+                        "nouveau",
+                        "virgl",
+                        "vmware",
+                        "qxl",
+                        "fbdev",
+                        "vesa",
+                        "lavapipe",
+                        "d3d12",
+                        "freedreno",
+                    ][..],
+                ),
                 ("INPUT_DEVICES", &["libinput", "evdev", "synaptics", "wacom", "joystick"][..]),
             ] {
                 let cur = mc.value(var);
@@ -823,7 +937,8 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
                         w::help(ui, d);
                     }
                     if mc.count(&name) > 1 {
-                        ui.label(RichText::new(format!("×{}", mc.count(&name))).size(11.0).color(ORANGE)).on_hover_text("Assigned more than once; the last one wins");
+                        ui.label(RichText::new(format!("×{}", mc.count(&name))).size(11.0).color(ORANGE))
+                            .on_hover_text("Assigned more than once; the last one wins");
                     }
                 });
                 let editing = app.config_view.mk_edit.as_ref().is_some_and(|(n, _)| *n == name);
@@ -847,7 +962,8 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
                     }
                 } else {
                     ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(RichText::new(&a.expanded).monospace().size(12.0)).truncate()).on_hover_text(format!("as written: {}", a.value));
+                        ui.add(egui::Label::new(RichText::new(&a.expanded).monospace().size(12.0)).truncate())
+                            .on_hover_text(format!("as written: {}", a.value));
                         if !a.self_ref && a.file == file && w::icon_button(ui, icon::PENCIL_SIMPLE, "Edit").clicked() {
                             app.config_view.mk_edit = Some((name.clone(), a.value.clone()));
                         }
@@ -874,7 +990,12 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
             ui.horizontal(|ui| {
                 if w::primary(ui, icon::FLOPPY_DISK, "Save make.conf").clicked() {
                     let new = app.config_view.mk_raw.clone().unwrap();
-                    app.push(Action::Write { title: "Edit make.conf".into(), changes: vec![FileChange { path: file.clone(), old: text.clone(), new: Some(new) }], reload: vec![Reload::MakeConf, Reload::Env], then: None });
+                    app.push(Action::Write {
+                        title: "Edit make.conf".into(),
+                        changes: vec![FileChange { path: file.clone(), old: text.clone(), new: Some(new) }],
+                        reload: vec![Reload::MakeConf, Reload::Env],
+                        then: None,
+                    });
                     close = true;
                 }
                 if w::button(ui, "", "Close").clicked() {
@@ -924,10 +1045,16 @@ fn env_files(app: &mut App, ui: &mut Ui) {
                     ui.label(RichText::new(icon::FILE_CODE).size(20.0).color(ACCENT));
                     ui.label(RichText::new(&e.name).size(16.0).family(theme::bold()).color(WHITE));
                     let used = users.get(&e.name).map(|v| v.len()).unwrap_or(0);
-                    ui.label(w::dim(format!("used by {used} package.env entr{}", if used == 1 { "y" } else { "ies" }))).on_hover_text(users.get(&e.name).map(|v| v.join("\n")).unwrap_or_default());
+                    ui.label(w::dim(format!("used by {used} package.env entr{}", if used == 1 { "y" } else { "ies" })))
+                        .on_hover_text(users.get(&e.name).map(|v| v.join("\n")).unwrap_or_default());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if w::icon_button(ui, icon::TRASH, "Delete").clicked() {
-                            app.push(Action::Write { title: format!("Delete env/{}", e.name), changes: vec![FileChange { path: e.path.clone(), old: e.content.clone(), new: None }], reload: vec![Reload::Config], then: None });
+                            app.push(Action::Write {
+                                title: format!("Delete env/{}", e.name),
+                                changes: vec![FileChange { path: e.path.clone(), old: e.content.clone(), new: None }],
+                                reload: vec![Reload::Config],
+                                then: None,
+                            });
                         }
                         if w::icon_button(ui, icon::PENCIL_SIMPLE, "Edit").clicked() {
                             app.config_view.env_edit = Some((e.path.clone(), e.content.clone()));
@@ -941,7 +1068,12 @@ fn env_files(app: &mut App, ui: &mut Ui) {
                     ui.horizontal(|ui| {
                         if w::primary(ui, icon::FLOPPY_DISK, "Save").clicked() {
                             let (p, t) = app.config_view.env_edit.take().unwrap();
-                            app.push(Action::Write { title: format!("Edit env/{}", e.name), changes: vec![FileChange { path: p, old: e.content.clone(), new: Some(t) }], reload: vec![Reload::Config], then: None });
+                            app.push(Action::Write {
+                                title: format!("Edit env/{}", e.name),
+                                changes: vec![FileChange { path: p, old: e.content.clone(), new: Some(t) }],
+                                reload: vec![Reload::Config],
+                                then: None,
+                            });
                         }
                         if w::button(ui, "", "Cancel").clicked() {
                             app.config_view.env_edit = None;
@@ -958,7 +1090,16 @@ fn env_files(app: &mut App, ui: &mut Ui) {
             ui.add(egui::TextEdit::singleline(&mut app.config_view.env_new).hint_text("name").desired_width(180.0));
             let name = app.config_view.env_new.trim().to_string();
             if ui.add_enabled(!name.is_empty() && !name.contains('/'), egui::Button::new(format!("{} Create empty", icon::PLUS))).clicked() {
-                app.push(Action::Write { title: format!("Create env/{name}"), changes: vec![FileChange { path: PathBuf::from(format!("/etc/portage/env/{name}")), old: String::new(), new: Some("# variables for package.env\n".into()) }], reload: vec![Reload::Config], then: None });
+                app.push(Action::Write {
+                    title: format!("Create env/{name}"),
+                    changes: vec![FileChange {
+                        path: PathBuf::from(format!("/etc/portage/env/{name}")),
+                        old: String::new(),
+                        new: Some("# variables for package.env\n".into()),
+                    }],
+                    reload: vec![Reload::Config],
+                    then: None,
+                });
             }
         });
         ui.label(w::dim("Or start from a template:"));
@@ -966,7 +1107,16 @@ fn env_files(app: &mut App, ui: &mut Ui) {
             for (name, desc, content) in ENV_TEMPLATES {
                 let exists = cfg.env_files.iter().any(|e| e.name == *name);
                 if ui.add_enabled(!exists, egui::Button::new(format!("{name}"))).on_hover_text(format!("{desc}\n\n{content}")).clicked() {
-                    app.push(Action::Write { title: format!("Create env/{name}"), changes: vec![FileChange { path: PathBuf::from(format!("/etc/portage/env/{name}")), old: String::new(), new: Some(format!("# {desc}\n{content}")) }], reload: vec![Reload::Config], then: None });
+                    app.push(Action::Write {
+                        title: format!("Create env/{name}"),
+                        changes: vec![FileChange {
+                            path: PathBuf::from(format!("/etc/portage/env/{name}")),
+                            old: String::new(),
+                            new: Some(format!("# {desc}\n{content}")),
+                        }],
+                        reload: vec![Reload::Config],
+                        then: None,
+                    });
                 }
             }
         });
@@ -1032,37 +1182,45 @@ fn news(app: &mut App, ui: &mut Ui) {
         w::loading(ui, "Reading news…");
         return;
     };
-    egui::Panel::left("news-list").resizable(true).default_size(360.0).frame(egui::Frame::new().fill(Color32::from_rgb(0x19, 0x22, 0x2e)).inner_margin(Margin::same(8))).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("NEWS").size(12.0).family(theme::bold()).color(TEXT_DIM));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Mark all read").on_hover_text("eselect news read --quiet all").clicked() {
-                    app.push(Action::Root {
-                        title: "Mark news as read".into(),
-                        argv: vec!["eselect".into(), "news".into(), "read".into(), "--quiet".into(), "all".into()],
-                        reload: vec![Reload::News],
-                        kind: JobKind::Generic,
-                    });
+    egui::Panel::left("news-list")
+        .resizable(true)
+        .default_size(360.0)
+        .frame(egui::Frame::new().fill(Color32::from_rgb(0x19, 0x22, 0x2e)).inner_margin(Margin::same(8)))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("NEWS").size(12.0).family(theme::bold()).color(TEXT_DIM));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("Mark all read").on_hover_text("eselect news read --quiet all").clicked() {
+                        app.push(Action::Root {
+                            title: "Mark news as read".into(),
+                            argv: vec!["eselect".into(), "news".into(), "read".into(), "--quiet".into(), "all".into()],
+                            reload: vec![Reload::News],
+                            kind: JobKind::Generic,
+                        });
+                    }
+                });
+            });
+            egui::ScrollArea::vertical().id_salt("news-scroll").show(ui, |ui| {
+                for n in news.iter() {
+                    let sel = app.config_view.news_open.as_deref() == Some(&n.name);
+                    let r = ui.add_sized(
+                        [ui.available_width(), 46.0],
+                        egui::Button::new(
+                            RichText::new(format!("{} {}\n{}", if n.unread { icon::CIRCLE } else { "" }, n.title, n.posted)).color(if n.unread {
+                                WHITE
+                            } else {
+                                TEXT_DIM
+                            }),
+                        )
+                        .selected(sel)
+                        .wrap(),
+                    );
+                    if r.clicked() {
+                        app.config_view.news_open = Some(n.name.clone());
+                    }
                 }
             });
         });
-        egui::ScrollArea::vertical().id_salt("news-scroll").show(ui, |ui| {
-            for n in news.iter() {
-                let sel = app.config_view.news_open.as_deref() == Some(&n.name);
-                let r = ui.add_sized(
-                    [ui.available_width(), 46.0],
-                    egui::Button::new(
-                        RichText::new(format!("{} {}\n{}", if n.unread { icon::CIRCLE } else { "" }, n.title, n.posted)).color(if n.unread { WHITE } else { TEXT_DIM }),
-                    )
-                    .selected(sel)
-                    .wrap(),
-                );
-                if r.clicked() {
-                    app.config_view.news_open = Some(n.name.clone());
-                }
-            }
-        });
-    });
     egui::CentralPanel::default().frame(egui::Frame::new().fill(BG)).show(ui, |ui| {
         let Some(item) = app.config_view.news_open.as_ref().and_then(|n| news.iter().find(|x| x.name == *n)).or_else(|| news.first()) else {
             w::empty_state(ui, icon::NEWSPAPER, "No news", "");
@@ -1109,7 +1267,10 @@ fn updates(app: &mut App, ui: &mut Ui) {
                 app.config_view.updates = None;
             }
         });
-        w::subtitle(ui, "When a package ships a new version of a config file you edited, Portage saves it as ._cfgXXXX_name instead of overwriting yours (CONFIG_PROTECT).");
+        w::subtitle(
+            ui,
+            "When a package ships a new version of a config file you edited, Portage saves it as ._cfgXXXX_name instead of overwriting yours (CONFIG_PROTECT).",
+        );
         ui.add_space(6.0);
         let Some(list) = list else {
             w::loading(ui, "Scanning CONFIG_PROTECT directories…");
@@ -1139,11 +1300,21 @@ fn updates(app: &mut App, ui: &mut Ui) {
                     ui.label(w::strong(target.to_string_lossy()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if w::button(ui, icon::X, "Keep mine").on_hover_text("Delete the new version").clicked() {
-                            app.push(Action::Batch { title: format!("Keep {}", target.display()), ops: vec![Op::ConfigUpdate { path: upd.to_string_lossy().to_string(), accept: false }], reload: vec![], then: None });
+                            app.push(Action::Batch {
+                                title: format!("Keep {}", target.display()),
+                                ops: vec![Op::ConfigUpdate { path: upd.to_string_lossy().to_string(), accept: false }],
+                                reload: vec![],
+                                then: None,
+                            });
                             app.config_view.updates = None;
                         }
                         if w::primary(ui, icon::CHECK, "Use new version").clicked() {
-                            app.push(Action::Batch { title: format!("Update {}", target.display()), ops: vec![Op::ConfigUpdate { path: upd.to_string_lossy().to_string(), accept: true }], reload: vec![], then: None });
+                            app.push(Action::Batch {
+                                title: format!("Update {}", target.display()),
+                                ops: vec![Op::ConfigUpdate { path: upd.to_string_lossy().to_string(), accept: true }],
+                                reload: vec![],
+                                then: None,
+                            });
                             app.config_view.updates = None;
                         }
                     });
@@ -1193,7 +1364,10 @@ fn strays(app: &mut App, ui: &mut Ui) {
                 let content = std::fs::read_to_string(&s.path).unwrap_or_default();
                 match &s.reason {
                     StrayReason::Misnamed { kind, suggested_name } => {
-                        ui.label(format!("Looks like it was meant to be inside {}/ — the separator is missing, so Portage ignores these entries.", kind.file_name()));
+                        ui.label(format!(
+                            "Looks like it was meant to be inside {}/ — the separator is missing, so Portage ignores these entries.",
+                            kind.file_name()
+                        ));
                         let name = app.config_view.stray_names.entry(s.path.clone()).or_insert_with(|| suggested_name.clone());
                         ui.horizontal(|ui| {
                             ui.label(w::dim(format!("Move to {}/", kind.path().display())));
@@ -1220,7 +1394,12 @@ fn strays(app: &mut App, ui: &mut Ui) {
                 }
                 if w::danger(ui, icon::TRASH, "Delete file").clicked() {
                     // DeleteFile through a reviewed write.
-                    app.push(Action::Write { title: format!("Delete {}", s.path.display()), changes: vec![FileChange { path: s.path.clone(), old: content.clone(), new: None }], reload: vec![Reload::Config], then: None });
+                    app.push(Action::Write {
+                        title: format!("Delete {}", s.path.display()),
+                        changes: vec![FileChange { path: s.path.clone(), old: content.clone(), new: None }],
+                        reload: vec![Reload::Config],
+                        then: None,
+                    });
                 }
             });
             ui.add_space(4.0);

@@ -72,11 +72,7 @@ impl App {
             Reload::Kernels if snapshot.vdb.is_none() => return,
             Reload::Leftovers if snapshot.vdb.is_none() || snapshot.catalog.is_none() || snapshot.config.is_none() || snapshot.env.is_none() => return,
             Reload::Updates
-                if snapshot.catalog.is_none()
-                    || snapshot.vdb.is_none()
-                    || snapshot.env.is_none()
-                    || snapshot.config.is_none()
-                    || snapshot.masks.is_none() =>
+                if snapshot.catalog.is_none() || snapshot.vdb.is_none() || snapshot.env.is_none() || snapshot.config.is_none() || snapshot.masks.is_none() =>
             {
                 return;
             }

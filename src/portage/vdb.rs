@@ -127,12 +127,7 @@ pub fn load() -> Vdb {
             v.world.push(a);
         }
     }
-    v.world_sets = std::fs::read_to_string(WORLD_SETS)
-        .unwrap_or_default()
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
+    v.world_sets = std::fs::read_to_string(WORLD_SETS).unwrap_or_default().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
     v
 }
 

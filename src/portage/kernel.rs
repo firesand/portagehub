@@ -1,8 +1,8 @@
 //! Installed kernels, their boot files, known-good state, the bootloader in
 //! use and the NVIDIA kernel module for each kernel — plus the boot check.
 
-use super::version::Version;
 use super::vdb::Vdb;
+use super::version::Version;
 use portagehub::protocol::{BootAction, BootScan};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -158,12 +158,7 @@ fn read_trim(p: &Path) -> String {
 }
 
 fn mtime(p: &Path) -> i64 {
-    std::fs::metadata(p)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    std::fs::metadata(p).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
 fn find_nvidia_ko(dir: &Path, depth: usize) -> Option<PathBuf> {
@@ -192,11 +187,7 @@ fn modinfo_version(path: &Path) -> Option<String> {
 }
 
 pub fn default_state_dir() -> PathBuf {
-    if Path::new("/var/lib/kernel-fallback").is_dir() {
-        PathBuf::from("/var/lib/kernel-fallback")
-    } else {
-        PathBuf::from("/var/lib/portagehub/kernels")
-    }
+    if Path::new("/var/lib/kernel-fallback").is_dir() { PathBuf::from("/var/lib/kernel-fallback") } else { PathBuf::from("/var/lib/portagehub/kernels") }
 }
 
 fn detect_gpu() -> (bool, String) {
@@ -305,10 +296,8 @@ pub fn load(vdb: &Vdb, keep_set: &str) -> KernelState {
         let contents = std::fs::read_to_string(p.dir.join("CONTENTS")).unwrap_or_default();
         let mut kvers: Vec<String> = Vec::new();
         for l in contents.lines() {
-            let k = l
-                .strip_prefix("dir /lib/modules/")
-                .filter(|r| !r.contains('/'))
-                .or_else(|| l.strip_prefix("dir /usr/src/linux-").filter(|r| !r.contains('/')));
+            let k =
+                l.strip_prefix("dir /lib/modules/").filter(|r| !r.contains('/')).or_else(|| l.strip_prefix("dir /usr/src/linux-").filter(|r| !r.contains('/')));
             if let Some(k) = k
                 && !kvers.iter().any(|x| x == k)
             {
@@ -316,7 +305,12 @@ pub fn load(vdb: &Vdb, keep_set: &str) -> KernelState {
             }
         }
         if kvers.is_empty() {
-            if contents.contains("/usr/src/linux-") || contents.contains("/lib/modules/") || p.pn.ends_with("-kernel") || p.pn.ends_with("-kernel-bin") || p.pn.ends_with("-sources") {
+            if contents.contains("/usr/src/linux-")
+                || contents.contains("/lib/modules/")
+                || p.pn.ends_with("-kernel")
+                || p.pn.ends_with("-kernel-bin")
+                || p.pn.ends_with("-sources")
+            {
                 // Kernel package whose files are gone (or not yet mapped).
                 let any_file = contents.lines().any(|l| {
                     l.split_whitespace().nth(1).is_some_and(|f| (f.starts_with("/usr/src/linux-") || f.starts_with("/lib/modules/")) && Path::new(f).exists())
@@ -482,17 +476,12 @@ fn find(sev: Severity, title: impl Into<String>, detail: impl Into<String>, fixe
 
 /// Atoms the keep set should contain for the known-good kernels.
 pub fn wanted_keep_atoms(st: &KernelState, last: Option<&str>, prev: Option<&str>) -> Vec<String> {
-    [last, prev]
-        .into_iter()
-        .flatten()
-        .filter_map(|k| st.get(k).and_then(|e| e.pkg.clone()))
-        .map(|cpv| format!("={cpv}"))
-        .fold(Vec::new(), |mut v, a| {
-            if !v.contains(&a) {
-                v.push(a);
-            }
-            v
-        })
+    [last, prev].into_iter().flatten().filter_map(|k| st.get(k).and_then(|e| e.pkg.clone())).map(|cpv| format!("={cpv}")).fold(Vec::new(), |mut v, a| {
+        if !v.contains(&a) {
+            v.push(a);
+        }
+        v
+    })
 }
 
 /// Inspect boot readiness. `scan` holds the root-only files (None = not read yet).
@@ -561,7 +550,10 @@ pub fn check(st: &KernelState, scan: Option<&BootScan>, protect: bool, min_boota
             out.push(find(
                 Severity::Warn,
                 format!("@{} does not protect all known-good kernels", st.keep_set),
-                format!("Missing: {}. Without it, emerge --depclean may remove a known-good kernel.", missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")),
+                format!(
+                    "Missing: {}. Without it, emerge --depclean may remove a known-good kernel.",
+                    missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                ),
                 vec![Fix::WriteKeepSet],
             ));
         }
@@ -597,7 +589,11 @@ pub fn check(st: &KernelState, scan: Option<&BootScan>, protect: bool, min_boota
             out.push(find(
                 Severity::Warn,
                 format!("Kernel {} has no initramfs", k.kver),
-                format!("installkernel is set up to use {}, but /boot/initramfs-{}.img is missing.", st.boot.initramfs_tool.clone().unwrap_or_default(), k.kver),
+                format!(
+                    "installkernel is set up to use {}, but /boot/initramfs-{}.img is missing.",
+                    st.boot.initramfs_tool.clone().unwrap_or_default(),
+                    k.kver
+                ),
                 vec![Fix::Boot(BootAction::DracutRegen, Some(k.kver.clone()))],
             ));
         }
@@ -646,7 +642,9 @@ pub fn check(st: &KernelState, scan: Option<&BootScan>, protect: bool, min_boota
                         Some(NvStatus::Missing) => out.push(find(
                             if important { Severity::Error } else { Severity::Warn },
                             format!("No NVIDIA module for kernel {}", k.kver),
-                            format!("nvidia-drivers {want} is not built for this kernel: it boots without GPU acceleration (black screen or software rendering)."),
+                            format!(
+                                "nvidia-drivers {want} is not built for this kernel: it boots without GPU acceleration (black screen or software rendering)."
+                            ),
                             vec![Fix::RebuildNvidia],
                         )),
                         Some(NvStatus::Mismatch(v)) => out.push(find(
@@ -709,7 +707,12 @@ fn check_bootloader(st: &KernelState, scan: &BootScan, bootable: &[&KernelEntry]
         Some(Bootloader::Grub) => {
             let cfg = scan.file("/boot/grub/grub.cfg").or(scan.file("/boot/grub2/grub.cfg"));
             let Some(cfg) = cfg else {
-                out.push(find(Severity::Error, "GRUB is used but grub.cfg was not found", "Generate it with grub-mkconfig.", vec![Fix::Boot(BootAction::GrubMkconfig, None)]));
+                out.push(find(
+                    Severity::Error,
+                    "GRUB is used but grub.cfg was not found",
+                    "Generate it with grub-mkconfig.",
+                    vec![Fix::Boot(BootAction::GrubMkconfig, None)],
+                ));
                 return out;
             };
             let mut missing = Vec::new();
@@ -755,11 +758,14 @@ fn check_bootloader(st: &KernelState, scan: &BootScan, bootable: &[&KernelEntry]
                 ));
             }
             if missing.is_empty() && stale.is_empty() && cfg.mtime > 0 && cfg.mtime < newest_image {
-                out.push(find(Severity::Info, "grub.cfg is older than the newest kernel", "Entries are present, but regenerating keeps titles and options current.", vec![Fix::Boot(BootAction::GrubMkconfig, None)]));
+                out.push(find(
+                    Severity::Info,
+                    "grub.cfg is older than the newest kernel",
+                    "Entries are present, but regenerating keeps titles and options current.",
+                    vec![Fix::Boot(BootAction::GrubMkconfig, None)],
+                ));
             }
-            let saved = scan
-                .file("/boot/grub/grubenv")
-                .and_then(|f| f.content.lines().find_map(|l| l.strip_prefix("saved_entry=")).map(|s| s.to_string()));
+            let saved = scan.file("/boot/grub/grubenv").and_then(|f| f.content.lines().find_map(|l| l.strip_prefix("saved_entry=")).map(|s| s.to_string()));
             let default = scan
                 .file("/etc/default/grub")
                 .and_then(|f| f.content.lines().find_map(|l| l.trim().strip_prefix("GRUB_DEFAULT=")).map(|s| s.trim_matches('"').to_string()));
@@ -767,7 +773,11 @@ fn check_bootloader(st: &KernelState, scan: &BootScan, bootable: &[&KernelEntry]
                 out.push(find(
                     Severity::Ok,
                     format!("GRUB menu has all {} bootable kernels", bootable.len()),
-                    format!("Default entry: {}{}", default.unwrap_or_else(|| "0 (first, the newest kernel)".into()), saved.map(|s| format!(" · last saved: {s}")).unwrap_or_default()),
+                    format!(
+                        "Default entry: {}{}",
+                        default.unwrap_or_else(|| "0 (first, the newest kernel)".into()),
+                        saved.map(|s| format!(" · last saved: {s}")).unwrap_or_default()
+                    ),
                     vec![],
                 ));
             }
@@ -788,7 +798,12 @@ fn check_bootloader(st: &KernelState, scan: &BootScan, bootable: &[&KernelEntry]
                 out.push(find(Severity::Ok, format!("systemd-boot has entries for all {} bootable kernels", bootable.len()), "", vec![]));
             } else {
                 let fixes = missing.iter().filter_map(|k| st.get(k).and_then(|e| e.pkg.clone())).map(Fix::EmergeConfig).collect();
-                out.push(find(Severity::Error, format!("systemd-boot has no entry for {}", missing.join(", ")), "Re-run the kernel's install step (emerge --config) to create the loader entry.", fixes));
+                out.push(find(
+                    Severity::Error,
+                    format!("systemd-boot has no entry for {}", missing.join(", ")),
+                    "Re-run the kernel's install step (emerge --config) to create the loader entry.",
+                    fixes,
+                ));
             }
         }
         Some(Bootloader::Lilo) => match scan.file("/etc/lilo.conf") {
@@ -814,8 +829,18 @@ fn check_bootloader(st: &KernelState, scan: &BootScan, bootable: &[&KernelEntry]
                 }
             }
         },
-        Some(b) => out.push(find(Severity::Info, format!("{} detected", b.name()), "PortageHub cannot inspect this bootloader's menu; make sure installkernel updates it.", vec![])),
-        None => out.push(find(Severity::Warn, "No bootloader detected", "Install one (sys-boot/grub, systemd-boot, …) and enable the matching installkernel USE flag.", vec![])),
+        Some(b) => out.push(find(
+            Severity::Info,
+            format!("{} detected", b.name()),
+            "PortageHub cannot inspect this bootloader's menu; make sure installkernel updates it.",
+            vec![],
+        )),
+        None => out.push(find(
+            Severity::Warn,
+            "No bootloader detected",
+            "Install one (sys-boot/grub, systemd-boot, …) and enable the matching installkernel USE flag.",
+            vec![],
+        )),
     }
     for e in &scan.errors {
         out.push(find(Severity::Info, "Could not read a boot file", e.clone(), vec![]));

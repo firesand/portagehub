@@ -11,7 +11,8 @@ pub fn env_allowed(key: &str) -> bool {
 
 /// Options of Portage's Python tools that point them at other configuration,
 /// repositories or install roots.
-const DENIED_OPTIONS: &[&str] = &["--config-root", "--root", "--sysroot", "--prefix", "--repositories-configuration", "--portdir", "--portdir-overlay", "--cache-dir"];
+const DENIED_OPTIONS: &[&str] =
+    &["--config-root", "--root", "--sysroot", "--prefix", "--repositories-configuration", "--portdir", "--portdir-overlay", "--cache-dir"];
 /// Real options that happen to be prefixes of a denied one (argparse prefers exact matches).
 const EXACT_OK: &[&str] = &["--config", "--repo"];
 

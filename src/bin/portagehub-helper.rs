@@ -120,7 +120,10 @@ fn main() {
                 // Answer with the request's id so the GUI can fail that request
                 // (e.g. an operation this helper version doesn't know).
                 let id = serde_json::from_str::<serde_json::Value>(&line).ok().and_then(|v| v.get("id").and_then(|i| i.as_u64())).unwrap_or(0);
-                let _ = tx.send(Event::Err { id, msg: format!("unsupported request ({e}); the installed helper may be older than PortageHub — run sudo dist/install.sh") });
+                let _ = tx.send(Event::Err {
+                    id,
+                    msg: format!("unsupported request ({e}); the installed helper may be older than PortageHub — run sudo dist/install.sh"),
+                });
             }
         }
     }

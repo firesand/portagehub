@@ -88,10 +88,7 @@ fn hero(app: &mut App, ui: &mut Ui) {
     ui.label(RichText::new(facts.join("  ·  ")).color(TEXT));
     ui.add_space(14.0);
     ui.horizontal(|ui| {
-        if w::big_button(ui, &format!("{}  UPDATE SYSTEM", icon::ROCKET_LAUNCH), GRAD_GREEN, 200.0)
-            .on_hover_text("Preview emerge -uDN @world")
-            .clicked()
-        {
+        if w::big_button(ui, &format!("{}  UPDATE SYSTEM", icon::ROCKET_LAUNCH), GRAD_GREEN, 200.0).on_hover_text("Preview emerge -uDN @world").clicked() {
             app.push(Action::Pretend((emerge::recipes()[0].build)()));
         }
         ui.add_space(6.0);
@@ -202,7 +199,11 @@ fn kernel_banner(app: &mut App, ui: &mut Ui) {
             ui.vertical(|ui| {
                 ui.label(w::strong(format!("Kernels & boot: {}", important[0].title)));
                 if important.len() > 1 {
-                    ui.label(w::dim(format!("+{} more: {}", important.len() - 1, important[1..].iter().map(|f| f.title.as_str()).collect::<Vec<_>>().join(" · "))));
+                    ui.label(w::dim(format!(
+                        "+{} more: {}",
+                        important.len() - 1,
+                        important[1..].iter().map(|f| f.title.as_str()).collect::<Vec<_>>().join(" · ")
+                    )));
                 } else {
                     ui.label(w::dim(&important[0].detail));
                 }
@@ -294,7 +295,14 @@ fn updates_section(app: &mut App, ui: &mut Ui) {
                     if !cards.iter().any(|(c, _)| c.key == e.key) {
                         let old = e.old.first().map(|o| o.split([':']).next().unwrap_or("").to_string()).unwrap_or_default();
                         cards.push((
-                            crate::data::UpdateCandidate { key: e.key.clone(), installed: old, available: e.version.clone(), repo: e.repo.clone(), slot: e.slot.clone(), held_by: vec![] },
+                            crate::data::UpdateCandidate {
+                                key: e.key.clone(),
+                                installed: old,
+                                available: e.version.clone(),
+                                repo: e.repo.clone(),
+                                slot: e.slot.clone(),
+                                held_by: vec![],
+                            },
                             UpdState::WillUpdate,
                         ));
                     }
@@ -340,7 +348,11 @@ fn updates_section(app: &mut App, ui: &mut Ui) {
                         ui.label(w::dim("Also in the @world update:"));
                         for e in others {
                             let reason = rebuild_reason(e);
-                            let label = format!("{} {}", if e.status_label() == "NEW" { icon::PLUS } else { icon::ARROWS_CLOCKWISE }, e.key.rsplit('/').next().unwrap_or(&e.key));
+                            let label = format!(
+                                "{} {}",
+                                if e.status_label() == "NEW" { icon::PLUS } else { icon::ARROWS_CLOCKWISE },
+                                e.key.rsplit('/').next().unwrap_or(&e.key)
+                            );
                             let r = w::chip(ui, &label, false).on_hover_text(format!("{} — {}", e.key, reason));
                             if r.clicked() {
                                 app.push(Action::Open(e.key.clone()));
@@ -405,7 +417,13 @@ fn update_row(app: &mut App, ui: &mut Ui, c: &crate::data::UpdateCandidate, st: 
     let base = common::category_color(cat);
     let base = if dimmed { w::lerp_color(base, Color32::from_rgb(0x30, 0x38, 0x44), 0.6) } else { base };
     w::paint_vgradient(p, tile, w::lerp_color(base, WHITE, 0.12), w::lerp_color(base, Color32::BLACK, 0.35));
-    p.text(tile.center(), egui::Align2::CENTER_CENTER, common::category_icon(cat), FontId::proportional(18.0), Color32::from_white_alpha(if dimmed { 120 } else { 220 }));
+    p.text(
+        tile.center(),
+        egui::Align2::CENTER_CENTER,
+        common::category_icon(cat),
+        FontId::proportional(18.0),
+        Color32::from_white_alpha(if dimmed { 120 } else { 220 }),
+    );
     let x = tile.right() + 12.0;
     let mut job = egui::text::LayoutJob::default();
     job.append(pn, 0.0, egui::text::TextFormat { font_id: FontId::new(14.5, theme::medium()), color: if dimmed { TEXT } else { WHITE }, ..Default::default() });
@@ -435,7 +453,10 @@ fn update_row(app: &mut App, ui: &mut Ui, c: &crate::data::UpdateCandidate, st: 
             _ => (TEXT, Color32::from_rgb(0x3a, 0x46, 0x55)),
         };
         let g = ui.painter().layout_no_wrap(label.to_string(), FontId::new(10.5, theme::bold()), fg);
-        let br = egui::Rect::from_min_size(egui::pos2(rect.right() - 14.0 - g.size().x - 10.0, rect.center().y - (g.size().y + 6.0) / 2.0), g.size() + egui::vec2(10.0, 6.0));
+        let br = egui::Rect::from_min_size(
+            egui::pos2(rect.right() - 14.0 - g.size().x - 10.0, rect.center().y - (g.size().y + 6.0) / 2.0),
+            g.size() + egui::vec2(10.0, 6.0),
+        );
         p.rect_filled(br, CornerRadius::same(2), bg);
         p.galley(br.min + egui::vec2(5.0, 3.0), g, fg);
     }
@@ -466,9 +487,21 @@ fn category_grid(app: &mut App, ui: &mut Ui, cats: &[(String, usize)]) {
                     (w::lerp_color(base, WHITE, 0.08), w::lerp_color(base, Color32::BLACK, 0.4))
                 };
                 w::paint_hgradient(p, rect, a, b);
-                p.text(rect.left_center() + egui::vec2(14.0, 0.0), egui::Align2::LEFT_CENTER, common::category_icon(c), FontId::proportional(26.0), Color32::from_white_alpha(230));
+                p.text(
+                    rect.left_center() + egui::vec2(14.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    common::category_icon(c),
+                    FontId::proportional(26.0),
+                    Color32::from_white_alpha(230),
+                );
                 p.text(rect.left_top() + egui::vec2(52.0, 18.0), egui::Align2::LEFT_TOP, c, FontId::new(14.0, theme::medium()), WHITE);
-                p.text(rect.left_top() + egui::vec2(52.0, 40.0), egui::Align2::LEFT_TOP, format!("{n} packages"), FontId::proportional(12.0), Color32::from_white_alpha(170));
+                p.text(
+                    rect.left_top() + egui::vec2(52.0, 40.0),
+                    egui::Align2::LEFT_TOP,
+                    format!("{n} packages"),
+                    FontId::proportional(12.0),
+                    Color32::from_white_alpha(170),
+                );
                 if resp.clicked() {
                     app.store.category = Some(c.clone());
                     app.store.page = Page::Categories;

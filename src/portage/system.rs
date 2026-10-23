@@ -125,11 +125,8 @@ pub struct NewsItem {
 
 /// News items of a repository plus the unread list Portage keeps.
 pub fn load_news(repo: &str, repo_loc: &Path) -> Vec<NewsItem> {
-    let unread: Vec<String> = std::fs::read_to_string(format!("/var/lib/gentoo/news/news-{repo}.unread"))
-        .unwrap_or_default()
-        .lines()
-        .map(|l| l.trim().to_string())
-        .collect();
+    let unread: Vec<String> =
+        std::fs::read_to_string(format!("/var/lib/gentoo/news/news-{repo}.unread")).unwrap_or_default().lines().map(|l| l.trim().to_string()).collect();
     let mut out = Vec::new();
     for e in std::fs::read_dir(repo_loc.join("metadata/news")).into_iter().flatten().flatten() {
         let name = e.file_name().to_string_lossy().to_string();
@@ -202,7 +199,9 @@ mod tests {
 
     #[test]
     fn profiles() {
-        let p = parse_profiles("Available profile symlink targets:\n  [1]   default/linux/amd64/23.0 (stable)\n  [12]  default/linux/amd64/23.0/desktop/plasma (stable) *\n  [40]  default/linux/amd64/23.0/no-multilib (dev)\n");
+        let p = parse_profiles(
+            "Available profile symlink targets:\n  [1]   default/linux/amd64/23.0 (stable)\n  [12]  default/linux/amd64/23.0/desktop/plasma (stable) *\n  [40]  default/linux/amd64/23.0/no-multilib (dev)\n",
+        );
         assert_eq!(p.len(), 3);
         assert!(p[1].current);
         assert_eq!(p[1].path, "default/linux/amd64/23.0/desktop/plasma");

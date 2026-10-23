@@ -280,12 +280,8 @@ impl Journal {
     }
 
     pub fn list(&self) -> Vec<Manifest> {
-        let mut out: Vec<Manifest> = std::fs::read_dir(&self.dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|e| self.load(&e.file_name().to_string_lossy()).ok())
-            .collect();
+        let mut out: Vec<Manifest> =
+            std::fs::read_dir(&self.dir).into_iter().flatten().flatten().filter_map(|e| self.load(&e.file_name().to_string_lossy()).ok()).collect();
         out.sort_by(|a, b| b.id.cmp(&a.id));
         out
     }

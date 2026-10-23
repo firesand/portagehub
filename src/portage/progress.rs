@@ -367,10 +367,7 @@ mod tests {
     #[test]
     fn feed_parallel() {
         let h = History::default();
-        let mut t = Tracker::new(
-            &[("app-misc/a-1".into(), "gentoo".into(), false), ("app-misc/b-2".into(), "gentoo".into(), false)],
-            &h,
-        );
+        let mut t = Tracker::new(&[("app-misc/a-1".into(), "gentoo".into(), false), ("app-misc/b-2".into(), "gentoo".into(), false)], &h);
         t.feed(">>> Emerging (1 of 2) app-misc/a-1::gentoo", &h, Instant::now());
         t.feed(">>> Emerging (2 of 2) app-misc/b-2::gentoo", &h, Instant::now());
         assert_eq!(t.counts().2, 2);

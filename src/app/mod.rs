@@ -89,10 +89,29 @@ pub enum Action {
     Search(String),
     Pretend(EmergeOptions),
     Emerge(EmergeOptions, Vec<(String, String, bool)>),
-    Root { title: String, argv: Vec<String>, reload: Vec<Reload>, kind: JobKind },
-    Capture { tag: String, argv: Vec<String>, privilege: Priv },
-    Batch { title: String, ops: Vec<Op>, reload: Vec<Reload>, then: Option<Box<Action>> },
-    Write { title: String, changes: Vec<FileChange>, reload: Vec<Reload>, then: Option<Box<Action>> },
+    Root {
+        title: String,
+        argv: Vec<String>,
+        reload: Vec<Reload>,
+        kind: JobKind,
+    },
+    Capture {
+        tag: String,
+        argv: Vec<String>,
+        privilege: Priv,
+    },
+    Batch {
+        title: String,
+        ops: Vec<Op>,
+        reload: Vec<Reload>,
+        then: Option<Box<Action>>,
+    },
+    Write {
+        title: String,
+        changes: Vec<FileChange>,
+        reload: Vec<Reload>,
+        then: Option<Box<Action>>,
+    },
     Reload(Reload),
     Toast(ToastKind, String),
     Cancel(u64),
@@ -102,9 +121,18 @@ pub enum Action {
     RePretend,
     CheckWorld,
     /// A privileged helper operation shown as a job.
-    RootOp { title: String, op: Op, kind: JobKind, reload: Vec<Reload> },
+    RootOp {
+        title: String,
+        op: Op,
+        kind: JobKind,
+        reload: Vec<Reload>,
+    },
     /// An unprivileged background command with a specific job kind.
-    Job { title: String, argv: Vec<String>, kind: JobKind },
+    Job {
+        title: String,
+        argv: Vec<String>,
+        kind: JobKind,
+    },
 }
 
 #[derive(Default)]
@@ -248,13 +276,28 @@ impl App {
         let mut history = crate::portage::history::History::default();
         for (i, (c, _, secs)) in pkgs.iter().enumerate() {
             let key = crate::portage::atom::split_cpv(c).map(|(a, b, _)| format!("{a}/{b}")).unwrap();
-            history.merges.push(crate::portage::history::MergeRecord { cpv: c.to_string(), key: key.clone(), ver: String::new(), start: 0, end: *secs as i64, ok: true, binary: false });
+            history.merges.push(crate::portage::history::MergeRecord {
+                cpv: c.to_string(),
+                key: key.clone(),
+                ver: String::new(),
+                start: 0,
+                end: *secs as i64,
+                ok: true,
+                binary: false,
+            });
             history.by_key.entry(key).or_default().push(i);
         }
         let tracker = Box::new(Tracker::new(&planned, &history));
         let id = self.exec.alloc_id();
         let opts = EmergeOptions::default().targets(&["@demo"]);
-        self.jobs.push(Job::new(id, "emerge --update @demo (demo)".into(), JobKind::Emerge { opts, tracker }, Priv::User, vec!["emerge".into(), "@demo".into()], vec![]));
+        self.jobs.push(Job::new(
+            id,
+            "emerge --update @demo (demo)".into(),
+            JobKind::Emerge { opts, tracker },
+            Priv::User,
+            vec!["emerge".into(), "@demo".into()],
+            vec![],
+        ));
         self.emerge.active_job = Some(id);
         let sink = self.exec.sink();
         std::thread::spawn(move || {
@@ -350,10 +393,7 @@ impl eframe::App for App {
                 self.spawn_load(r);
             }
         }
-        egui::Panel::top("nav")
-            .frame(Frame::new().fill(NAV).inner_margin(Margin::symmetric(8, 6)))
-            .show_separator_line(false)
-            .show(ui, |ui| self.nav_bar(ui));
+        egui::Panel::top("nav").frame(Frame::new().fill(NAV).inner_margin(Margin::symmetric(8, 6))).show_separator_line(false).show(ui, |ui| self.nav_bar(ui));
         egui::Panel::bottom("status")
             .frame(Frame::new().fill(NAV).inner_margin(Margin::symmetric(10, 3)))
             .show_separator_line(false)

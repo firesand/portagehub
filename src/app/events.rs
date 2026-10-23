@@ -12,7 +12,15 @@ use std::sync::Arc;
 use std::time::Instant;
 
 impl App {
-    pub(super) fn start_job(&mut self, title: String, argv: Vec<String>, env: Vec<(String, String)>, privilege: Priv, kind: JobKind, reload: Vec<Reload>) -> u64 {
+    pub(super) fn start_job(
+        &mut self,
+        title: String,
+        argv: Vec<String>,
+        env: Vec<(String, String)>,
+        privilege: Priv,
+        kind: JobKind,
+        reload: Vec<Reload>,
+    ) -> u64 {
         let id = self.exec.run(argv.clone(), env, privilege);
         self.jobs.push(Job::new(id, title, kind, privilege, argv, reload));
         // Keep the job list bounded.
@@ -151,7 +159,10 @@ impl App {
                 let touched_kernel = match &job.kind {
                     JobKind::Emerge { tracker, .. } => tracker.items.iter().any(|i| {
                         i.stage == crate::portage::progress::Stage::Done
-                            && (i.key.starts_with("sys-kernel/") || i.key.starts_with("sys-boot/") || i.key == "virtual/dist-kernel" || i.key == "x11-drivers/nvidia-drivers")
+                            && (i.key.starts_with("sys-kernel/")
+                                || i.key.starts_with("sys-boot/")
+                                || i.key == "virtual/dist-kernel"
+                                || i.key == "x11-drivers/nvidia-drivers")
                     }),
                     _ => false,
                 };
@@ -171,7 +182,12 @@ impl App {
                     self.toast(ToastKind::Info, "A kernel, bootloader or NVIDIA driver changed — checking the boot setup…");
                     self.spawn_load(Reload::Kernels);
                     if self.exec.root_ready() {
-                        self.actions.push(Action::RootOp { title: "Read boot configuration".into(), op: Op::BootScan, kind: JobKind::BootScan, reload: vec![] });
+                        self.actions.push(Action::RootOp {
+                            title: "Read boot configuration".into(),
+                            op: Op::BootScan,
+                            kind: JobKind::BootScan,
+                            reload: vec![],
+                        });
                     }
                 }
                 let out = job.output();
@@ -224,7 +240,10 @@ impl App {
                 if ok {
                     self.toast(ToastKind::Success, format!("{}: done", job.title));
                 } else {
-                    self.toast(ToastKind::Error, format!("{} failed: {}", job.title, job.error.clone().unwrap_or_else(|| job.output().lines().last().unwrap_or("").to_string())));
+                    self.toast(
+                        ToastKind::Error,
+                        format!("{} failed: {}", job.title, job.error.clone().unwrap_or_else(|| job.output().lines().last().unwrap_or("").to_string())),
+                    );
                 }
             }
             JobKind::CleanupScan { tag } => {

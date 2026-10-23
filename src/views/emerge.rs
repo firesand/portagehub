@@ -50,14 +50,20 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     let mut p = app.emerge.page;
     let running = app.running_count();
     let activity_label = if running > 0 { format!("Activity ({running})") } else { "Activity".to_string() };
-    subnav(ui, &mut p, &[(Page::Recipes, "Quick actions"), (Page::Custom, "All options"), (Page::Review, "Preview & conflicts"), (Page::Activity, activity_label.as_str())], |ui| {
-        if let Some(env) = &app.data.env {
-            let d = env.get("EMERGE_DEFAULT_OPTS");
-            if !d.is_empty() {
-                ui.label(RichText::new(format!("EMERGE_DEFAULT_OPTS: {d}")).size(11.5).color(TEXT_FAINT)).on_hover_text("From make.conf; added to every emerge run unless you enable “Ignore EMERGE_DEFAULT_OPTS”.");
+    subnav(
+        ui,
+        &mut p,
+        &[(Page::Recipes, "Quick actions"), (Page::Custom, "All options"), (Page::Review, "Preview & conflicts"), (Page::Activity, activity_label.as_str())],
+        |ui| {
+            if let Some(env) = &app.data.env {
+                let d = env.get("EMERGE_DEFAULT_OPTS");
+                if !d.is_empty() {
+                    ui.label(RichText::new(format!("EMERGE_DEFAULT_OPTS: {d}")).size(11.5).color(TEXT_FAINT))
+                        .on_hover_text("From make.conf; added to every emerge run unless you enable “Ignore EMERGE_DEFAULT_OPTS”.");
+                }
             }
-        }
-    });
+        },
+    );
     app.emerge.page = p;
     match app.emerge.page {
         Page::Recipes => recipes(app, ui),
@@ -112,8 +118,16 @@ fn recipes(app: &mut App, ui: &mut Ui) {
             if w::big_button(ui, &format!("{}  SYNC ALL", icon::ARROWS_CLOCKWISE), GRAD_BLUE, 180.0).clicked() {
                 app.push(Action::Emerge(EmergeOptions { action: EAction::Sync, ..Default::default() }, vec![]));
             }
-            if w::big_button(ui, &format!("{}  WEB SYNC (snapshot)", icon::CLOUD_ARROW_DOWN), GRAD_GREY, 200.0).on_hover_text("emerge-webrsync: download a signed snapshot (useful behind firewalls)").clicked() {
-                app.push(Action::Root { title: "emerge-webrsync".into(), argv: vec!["emerge-webrsync".into()], reload: vec![Reload::Repos], kind: JobKind::Sync });
+            if w::big_button(ui, &format!("{}  WEB SYNC (snapshot)", icon::CLOUD_ARROW_DOWN), GRAD_GREY, 200.0)
+                .on_hover_text("emerge-webrsync: download a signed snapshot (useful behind firewalls)")
+                .clicked()
+            {
+                app.push(Action::Root {
+                    title: "emerge-webrsync".into(),
+                    argv: vec!["emerge-webrsync".into()],
+                    reload: vec![Reload::Repos],
+                    kind: JobKind::Sync,
+                });
                 app.emerge.page = Page::Activity;
             }
             if w::big_button(ui, &format!("{}  OVERLAYS…", icon::GIT_BRANCH), GRAD_GREY, 160.0).clicked() {
@@ -142,7 +156,11 @@ fn recipes(app: &mut App, ui: &mut Ui) {
                                 ui.label(RichText::new(ic).size(22.0).color(ACCENT));
                                 ui.vertical(|ui| {
                                     ui.label(w::strong(title));
-                                    ui.label(RichText::new(if available { sub.to_string() } else { format!("{} not installed", argv[0]) }).size(12.0).color(TEXT_DIM));
+                                    ui.label(
+                                        RichText::new(if available { sub.to_string() } else { format!("{} not installed", argv[0]) })
+                                            .size(12.0)
+                                            .color(TEXT_DIM),
+                                    );
                                 });
                             });
                         })
@@ -151,7 +169,12 @@ fn recipes(app: &mut App, ui: &mut Ui) {
                     .response
                     .interact(egui::Sense::click());
                 if available && r.clicked() {
-                    app.push(Action::Root { title: title.to_string(), argv: argv.iter().map(|s| s.to_string()).collect(), reload: vec![Reload::News], kind: JobKind::Generic });
+                    app.push(Action::Root {
+                        title: title.to_string(),
+                        argv: argv.iter().map(|s| s.to_string()).collect(),
+                        reload: vec![Reload::News],
+                        kind: JobKind::Generic,
+                    });
                     app.emerge.page = Page::Activity;
                 }
             }
@@ -291,23 +314,29 @@ fn custom(app: &mut App, ui: &mut Ui) {
         }
 
         // Environment overrides
-        egui::CollapsingHeader::new(RichText::new(format!("{}  Environment for this run", icon::SLIDERS)).size(15.0).family(theme::bold()).color(WHITE)).id_salt("env-ovr").show(ui, |ui| {
-            w::card().show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.label(w::dim("Temporarily override make.conf variables for this run only."));
-                egui::Grid::new("env-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                    ui.label("MAKEOPTS");
-                    ui.add(egui::TextEdit::singleline(&mut app.emerge.env_makeopts).hint_text(app.data.env.as_ref().map(|e| e.get("MAKEOPTS").to_string()).unwrap_or_default()).desired_width(300.0));
-                    ui.end_row();
-                    ui.label("FEATURES (added)");
-                    ui.add(egui::TextEdit::singleline(&mut app.emerge.env_features).hint_text("e.g. -test ccache").desired_width(300.0));
-                    ui.end_row();
-                    ui.label("Extra arguments");
-                    ui.add(egui::TextEdit::singleline(&mut app.emerge.options.extra_args).hint_text("anything not covered above").desired_width(300.0));
-                    ui.end_row();
+        egui::CollapsingHeader::new(RichText::new(format!("{}  Environment for this run", icon::SLIDERS)).size(15.0).family(theme::bold()).color(WHITE))
+            .id_salt("env-ovr")
+            .show(ui, |ui| {
+                w::card().show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(w::dim("Temporarily override make.conf variables for this run only."));
+                    egui::Grid::new("env-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                        ui.label("MAKEOPTS");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut app.emerge.env_makeopts)
+                                .hint_text(app.data.env.as_ref().map(|e| e.get("MAKEOPTS").to_string()).unwrap_or_default())
+                                .desired_width(300.0),
+                        );
+                        ui.end_row();
+                        ui.label("FEATURES (added)");
+                        ui.add(egui::TextEdit::singleline(&mut app.emerge.env_features).hint_text("e.g. -test ccache").desired_width(300.0));
+                        ui.end_row();
+                        ui.label("Extra arguments");
+                        ui.add(egui::TextEdit::singleline(&mut app.emerge.options.extra_args).hint_text("anything not covered above").desired_width(300.0));
+                        ui.end_row();
+                    });
                 });
             });
-        });
         let mut env = Vec::new();
         if !app.emerge.env_makeopts.trim().is_empty() {
             env.push(("MAKEOPTS".to_string(), app.emerge.env_makeopts.trim().to_string()));
@@ -399,7 +428,13 @@ fn option_row(app: &mut App, ui: &mut Ui, s: &emerge::Spec) {
                             "--backtrack" => Some(30),
                             "--load-average" => Some(std::thread::available_parallelism().map(|n| n.get() as i64).unwrap_or(4)),
                             "--jobs" => Some(2),
-                            _ => if allow_plain { None } else { Some(min) },
+                            _ => {
+                                if allow_plain {
+                                    None
+                                } else {
+                                    Some(min)
+                                }
+                            }
                         };
                         app.emerge.options.values.insert(s.flag, Value::Num(default));
                     } else {
@@ -504,9 +539,19 @@ fn review(app: &mut App, ui: &mut Ui) {
                 .depclean
                 .iter()
                 .filter(|c| {
-                    ["sys-kernel/", "sys-devel/gcc-", "sys-devel/binutils-", "sys-libs/glibc-", "dev-lang/python-", "llvm-core/", "sys-devel/llvm-", "sys-apps/portage-", "dev-lang/rust"]
-                        .iter()
-                        .any(|p| c.starts_with(p))
+                    [
+                        "sys-kernel/",
+                        "sys-devel/gcc-",
+                        "sys-devel/binutils-",
+                        "sys-libs/glibc-",
+                        "dev-lang/python-",
+                        "llvm-core/",
+                        "sys-devel/llvm-",
+                        "sys-apps/portage-",
+                        "dev-lang/rust",
+                    ]
+                    .iter()
+                    .any(|p| c.starts_with(p))
                 })
                 .collect();
             if !critical.is_empty() {
@@ -598,12 +643,14 @@ fn boot_preflight(app: &mut App, ui: &mut Ui, plan: &Plan) -> bool {
         if blocked.is_empty() {
             ui.label(RichText::new(format!("{} Boot partitions are writable — ready to install.", icon::CHECK_CIRCLE)).color(GREEN_TEXT));
         } else {
-            ui.label(RichText::new(format!(
-                "{} {} must be writable, or installkernel/grub cannot update it and the new kernel may not be bootable.",
-                icon::WARNING,
-                blocked.iter().map(|m| m.target.as_str()).collect::<Vec<_>>().join(", ")
-            ))
-            .color(ORANGE));
+            ui.label(
+                RichText::new(format!(
+                    "{} {} must be writable, or installkernel/grub cannot update it and the new kernel may not be bootable.",
+                    icon::WARNING,
+                    blocked.iter().map(|m| m.target.as_str()).collect::<Vec<_>>().join(", ")
+                ))
+                .color(ORANGE),
+            );
             ui.checkbox(&mut app.emerge.boot_override, "Start anyway (I'll handle it myself)");
         }
         ui.horizontal(|ui| {
@@ -623,15 +670,19 @@ fn summary(app: &mut App, ui: &mut Ui, plan: &Plan, opts: &EmergeOptions, boot_o
     let merges: Vec<_> = plan.merge_entries().collect();
     let count = |l: &str| merges.iter().filter(|e| e.status_label() == l).count();
     let history = app.data.history.clone().unwrap_or_default();
-    let total_est: u64 = merges
-        .iter()
-        .map(|e| if e.kind == EntryType::Binary { 20 } else { history.estimate_or_default(&e.key).0.as_secs() })
-        .sum();
+    let total_est: u64 = merges.iter().map(|e| if e.kind == EntryType::Binary { 20 } else { history.estimate_or_default(&e.key).0.as_secs() }).sum();
     let unknown = merges.iter().filter(|e| e.kind != EntryType::Binary && history.estimate(&e.key).is_none()).count();
     let blocking = plan.problems.iter().filter(|p| p.is_blocking()).count() + plan.suggestions.len();
     let removing = opts.action == EAction::Depclean || opts.action == EAction::Unmerge;
     let ok = plan.exit_code == Some(0) && blocking == 0;
-    w::card_tinted(if ok { GREEN } else if blocking > 0 { ORANGE } else { RED }).show(ui, |ui| {
+    w::card_tinted(if ok {
+        GREEN
+    } else if blocking > 0 {
+        ORANGE
+    } else {
+        RED
+    })
+    .show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             let (ic, col, head) = if ok {
@@ -649,7 +700,9 @@ fn summary(app: &mut App, ui: &mut Ui, plan: &Plan, opts: &EmergeOptions, boot_o
                 }
             });
             ui.add_space(20.0);
-            for (l, n) in [("NEW", count("NEW") + count("NEW SLOT")), ("UPDATE", count("UPDATE")), ("REBUILD", count("REBUILD")), ("DOWNGRADE", count("DOWNGRADE"))] {
+            for (l, n) in
+                [("NEW", count("NEW") + count("NEW SLOT")), ("UPDATE", count("UPDATE")), ("REBUILD", count("REBUILD")), ("DOWNGRADE", count("DOWNGRADE"))]
+            {
                 if n > 0 {
                     ui.vertical(|ui| {
                         ui.label(RichText::new(n.to_string()).size(22.0).family(theme::bold()).color(WHITE));
@@ -666,12 +719,15 @@ fn summary(app: &mut App, ui: &mut Ui, plan: &Plan, opts: &EmergeOptions, boot_o
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let can_run = (ok && (!merges.is_empty() || !plan.depclean.is_empty() || opts.action == EAction::Resume)) || (plan.exit_code == Some(0) && !merges.is_empty());
-                let (label, grad) = if removing { (format!("{}  REMOVE", icon::TRASH), GRAD_RED) } else { (format!("{}  START EMERGE", icon::PLAY), GRAD_GREEN) };
+                let can_run = (ok && (!merges.is_empty() || !plan.depclean.is_empty() || opts.action == EAction::Resume))
+                    || (plan.exit_code == Some(0) && !merges.is_empty());
+                let (label, grad) =
+                    if removing { (format!("{}  REMOVE", icon::TRASH), GRAD_RED) } else { (format!("{}  START EMERGE", icon::PLAY), GRAD_GREEN) };
                 let needs_confirm = removing || opts.action.dangerous();
                 let allowed = can_run && (!needs_confirm || app.emerge.confirm_dangerous) && boot_ok;
                 if ui.add_enabled_ui(allowed, |ui| w::big_button(ui, &label, grad, 190.0)).inner.clicked() {
-                    let mut planned: Vec<(String, String, bool)> = merges.iter().map(|e| (e.cpv.clone(), e.repo.clone(), e.kind == EntryType::Binary)).collect();
+                    let mut planned: Vec<(String, String, bool)> =
+                        merges.iter().map(|e| (e.cpv.clone(), e.repo.clone(), e.kind == EntryType::Binary)).collect();
                     // Removals are quick; track them like binary merges.
                     planned.extend(plan.depclean.iter().map(|c| (c.clone(), String::new(), true)));
                     app.push(Action::Emerge(opts.clone(), planned));
@@ -721,7 +777,10 @@ fn problems(app: &mut App, ui: &mut Ui, plan: &Plan, opts: &EmergeOptions) {
                             ui.label(RichText::new(s.kind.file_name()).size(11.5).family(theme::bold()).color(TEXT_DIM));
                             ui.label(w::mono(&s.line));
                         });
-                        let e = crate::portage::config::Entry::new(s.line.split_whitespace().next().unwrap_or(""), s.line.split_whitespace().skip(1).map(String::from).collect());
+                        let e = crate::portage::config::Entry::new(
+                            s.line.split_whitespace().next().unwrap_or(""),
+                            s.line.split_whitespace().skip(1).map(String::from).collect(),
+                        );
                         ui.label(w::dim(e.describe(s.kind)));
                         if !s.required_by.is_empty() {
                             ui.label(RichText::new(format!("required by {}", s.required_by.join(" ← "))).size(11.5).color(TEXT_FAINT));
@@ -790,11 +849,18 @@ fn problem_body(app: &mut App, ui: &mut Ui, p: &Problem, pi: usize, opts: &Emerg
                         let fixes = c.fixes(arch);
                         if fixes.is_empty() {
                             ui.label(w::dim("cannot be fixed by configuration (e.g. EAPI too new: update Portage)"));
-                        } else if w::primary(ui, icon::LOCK_OPEN, "Allow this version").on_hover_text(fixes.iter().map(|f| format!("{}: {}", f.0.file_name(), f.1)).collect::<Vec<_>>().join("\n")).clicked()
+                        } else if w::primary(ui, icon::LOCK_OPEN, "Allow this version")
+                            .on_hover_text(fixes.iter().map(|f| format!("{}: {}", f.0.file_name(), f.1)).collect::<Vec<_>>().join("\n"))
+                            .clicked()
                             && let Some(cfg) = &cfg
                         {
                             let ch = edits::add_lines(cfg, &fixes, &target, Some(&format!("unmasked by PortageHub for {atom}")));
-                            app.push(Action::Write { title: format!("Allow {}", c.cpv), changes: ch, reload: vec![Reload::Config], then: Some(Box::new(Action::RePretend)) });
+                            app.push(Action::Write {
+                                title: format!("Allow {}", c.cpv),
+                                changes: ch,
+                                reload: vec![Reload::Config],
+                                then: Some(Box::new(Action::RePretend)),
+                            });
                         }
                     });
                 });
@@ -871,7 +937,10 @@ fn problem_body(app: &mut App, ui: &mut Ui, p: &Problem, pi: usize, opts: &Emerg
                         o.values.insert("--backtrack", Value::Num(Some(50)));
                     });
                 }
-                if w::button(ui, icon::GLOBE, "Update the whole world together").on_hover_text("emerge -uDN @world plus your targets, so dependents are updated at the same time").clicked() {
+                if w::button(ui, icon::GLOBE, "Update the whole world together")
+                    .on_hover_text("emerge -uDN @world plus your targets, so dependents are updated at the same time")
+                    .clicked()
+                {
                     retry_with(app, opts, |o| {
                         o.values.insert("--update", Value::On);
                         o.values.insert("--deep", Value::On);
@@ -947,7 +1016,12 @@ fn problem_body(app: &mut App, ui: &mut Ui, p: &Problem, pi: usize, opts: &Emerg
                             let atom = crate::portage::atom::Atom::parse(pkg).map(|a| a.key()).unwrap_or(pkg.clone());
                             let line = format!("{atom} {}", change.replace(',', " "));
                             let ch = edits::add_lines(cfg, &[(ConfKind::Use, line)], &target, Some("temporary: break circular dependency"));
-                            app.push(Action::Write { title: "Break dependency cycle".into(), changes: ch, reload: vec![Reload::Config], then: Some(Box::new(Action::RePretend)) });
+                            app.push(Action::Write {
+                                title: "Break dependency cycle".into(),
+                                changes: ch,
+                                reload: vec![Reload::Config],
+                                then: Some(Box::new(Action::RePretend)),
+                            });
                         }
                     });
                 }
@@ -987,12 +1061,17 @@ fn problem_body(app: &mut App, ui: &mut Ui, p: &Problem, pi: usize, opts: &Emerg
                     ui.label(w::strong(by));
                     if let Some(set) = by.strip_prefix('@') {
                         let path = std::path::PathBuf::from(format!("/etc/portage/sets/{set}"));
-                        if path.exists() && w::primary(ui, icon::PENCIL_SIMPLE, &format!("Edit set {by}")).on_hover_text(format!("Change or remove {atom} to allow {candidate}")).clicked() {
+                        if path.exists()
+                            && w::primary(ui, icon::PENCIL_SIMPLE, &format!("Edit set {by}"))
+                                .on_hover_text(format!("Change or remove {atom} to allow {candidate}"))
+                                .clicked()
+                        {
                             app.config_view.page = super::config::Page::Kind(ConfKind::Sets);
                             app.config_view.file_filter = Some(path);
                             app.push(Action::Tab(Tab::Config));
                         }
-                    } else if let Some(k) = by.trim_start_matches('(').split([',', ' ']).next().and_then(crate::portage::atom::split_cpv).map(|(c, p, _)| format!("{c}/{p}"))
+                    } else if let Some(k) =
+                        by.trim_start_matches('(').split([',', ' ']).next().and_then(crate::portage::atom::split_cpv).map(|(c, p, _)| format!("{c}/{p}"))
                         && w::button(ui, icon::INFO, "Open package").clicked()
                     {
                         app.push(Action::Open(k));
@@ -1100,42 +1179,45 @@ fn plan_table(app: &mut App, ui: &mut Ui, plan: &Plan) {
 fn activity(app: &mut App, ui: &mut Ui) {
     let jobs: Vec<Job> = app.jobs.iter().filter(|j| !matches!(j.kind, JobKind::Capture { .. }) || app.settings.show_advanced).cloned().collect();
     let batches: Vec<(String, usize, usize)> = app.batches.iter().map(|b| (b.title.clone(), b.done, b.done + b.ops.len() + 1)).collect();
-    egui::Panel::left("jobs-side").resizable(true).default_size(300.0).frame(egui::Frame::new().fill(SIDEBAR).inner_margin(Margin::symmetric(0, 8))).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.add_space(12.0);
-            ui.label(RichText::new("JOBS").size(12.0).family(theme::bold()).color(TEXT_DIM));
-        });
-        for (t, done, total) in &batches {
+    egui::Panel::left("jobs-side").resizable(true).default_size(300.0).frame(egui::Frame::new().fill(SIDEBAR).inner_margin(Margin::symmetric(0, 8))).show(
+        ui,
+        |ui| {
             ui.horizontal(|ui| {
                 ui.add_space(12.0);
-                ui.add(egui::Spinner::new().size(12.0).color(ACCENT));
-                ui.label(RichText::new(format!("{t} ({done}/{total})")).size(12.5).color(TEXT));
+                ui.label(RichText::new("JOBS").size(12.0).family(theme::bold()).color(TEXT_DIM));
             });
-        }
-        egui::ScrollArea::vertical().id_salt("jobs-list").show(ui, |ui| {
-            for j in jobs.iter().rev() {
-                let ic = if j.running() {
-                    icon::CIRCLE_NOTCH
-                } else if j.success() {
-                    icon::CHECK_CIRCLE
-                } else {
-                    icon::X_CIRCLE
-                };
-                let sel = app.emerge.selected_job.or(app.emerge.active_job) == Some(j.id);
-                let r = w::side_item(ui, ic, &j.title, sel, None).on_hover_text(format!("{}\n{}", j.argv.join(" "), j.status_text()));
-                if r.clicked() {
-                    app.emerge.selected_job = Some(j.id);
-                }
+            for (t, done, total) in &batches {
+                ui.horizontal(|ui| {
+                    ui.add_space(12.0);
+                    ui.add(egui::Spinner::new().size(12.0).color(ACCENT));
+                    ui.label(RichText::new(format!("{t} ({done}/{total})")).size(12.5).color(TEXT));
+                });
             }
-        });
-        if jobs.is_empty() {
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                ui.add_space(12.0);
-                ui.label(w::dim("Nothing has run yet."));
+            egui::ScrollArea::vertical().id_salt("jobs-list").show(ui, |ui| {
+                for j in jobs.iter().rev() {
+                    let ic = if j.running() {
+                        icon::CIRCLE_NOTCH
+                    } else if j.success() {
+                        icon::CHECK_CIRCLE
+                    } else {
+                        icon::X_CIRCLE
+                    };
+                    let sel = app.emerge.selected_job.or(app.emerge.active_job) == Some(j.id);
+                    let r = w::side_item(ui, ic, &j.title, sel, None).on_hover_text(format!("{}\n{}", j.argv.join(" "), j.status_text()));
+                    if r.clicked() {
+                        app.emerge.selected_job = Some(j.id);
+                    }
+                }
             });
-        }
-    });
+            if jobs.is_empty() {
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(12.0);
+                    ui.label(w::dim("Nothing has run yet."));
+                });
+            }
+        },
+    );
     egui::CentralPanel::default().frame(egui::Frame::new().fill(BG)).show(ui, |ui| {
         let sel = app.emerge.selected_job.or(app.emerge.active_job).or_else(|| jobs.last().map(|j| j.id));
         let Some(job) = sel.and_then(|id| app.job(id).cloned()) else {
@@ -1178,16 +1260,14 @@ fn job_header(app: &mut App, ui: &mut Ui, job: &Job) {
         ui.vertical(|ui| {
             ui.label(RichText::new(&job.title).size(18.0).family(theme::bold()).color(WHITE));
             let el = job.ended.unwrap_or_else(std::time::Instant::now) - job.started;
-            ui.label(w::dim(format!(
-                "{} · {} · {}",
-                job.status_text(),
-                fmt_duration(el),
-                if job.privilege == Priv::Root { "as root" } else { "as user" }
-            )));
+            ui.label(w::dim(format!("{} · {} · {}", job.status_text(), fmt_duration(el), if job.privilege == Priv::Root { "as root" } else { "as user" })));
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if job.running() {
-                if w::danger(ui, icon::STOP, "Stop").on_hover_text("Send SIGINT (like Ctrl+C). You can resume later with “Resume interrupted emerge”.").clicked() {
+                if w::danger(ui, icon::STOP, "Stop")
+                    .on_hover_text("Send SIGINT (like Ctrl+C). You can resume later with “Resume interrupted emerge”.")
+                    .clicked()
+                {
                     app.push(Action::Cancel(job.id));
                 }
             } else if matches!(job.kind, JobKind::Emerge { .. }) && !job.success() {
@@ -1271,19 +1351,24 @@ pub fn log_view(ui: &mut Ui, job: &Job, filter: &str, errors_only: bool, wrap: b
         .iter()
         .filter(|(err, l)| {
             (f.is_empty() || l.to_lowercase().contains(&f))
-                && (!errors_only || *err || l.contains("!!!") || l.contains(" * ERROR") || l.contains("error:") || l.contains("WARNING") || l.trim_start().starts_with("* "))
+                && (!errors_only
+                    || *err
+                    || l.contains("!!!")
+                    || l.contains(" * ERROR")
+                    || l.contains("error:")
+                    || l.contains("WARNING")
+                    || l.trim_start().starts_with("* "))
         })
         .collect();
     egui::Frame::new().fill(Color32::from_rgb(0x0b, 0x10, 0x16)).corner_radius(4).inner_margin(Margin::same(8)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         let row_h = 17.0;
         let total = lines.len() + usize::from(job.partial.is_some());
-        egui::ScrollArea::both()
-            .id_salt(("log", job.id))
-            .max_height(height)
-            .auto_shrink([false, false])
-            .stick_to_bottom(true)
-            .show_rows(ui, row_h, total, |ui, range| {
+        egui::ScrollArea::both().id_salt(("log", job.id)).max_height(height).auto_shrink([false, false]).stick_to_bottom(true).show_rows(
+            ui,
+            row_h,
+            total,
+            |ui, range| {
                 for i in range {
                     let (err, text) = if i < lines.len() { (lines[i].0, lines[i].1.as_str()) } else { (false, job.partial.as_deref().unwrap_or("")) };
                     let col = line_color(text, err);
@@ -1294,7 +1379,8 @@ pub fn log_view(ui: &mut Ui, job: &Job, filter: &str, errors_only: bool, wrap: b
                         ui.add(egui::Label::new(rt).extend());
                     }
                 }
-            });
+            },
+        );
     });
 }
 

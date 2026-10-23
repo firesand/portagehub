@@ -140,20 +140,54 @@ pub struct SlotConflict {
 
 #[derive(Debug, Clone)]
 pub enum Problem {
-    Masked { atom: String, candidates: Vec<MaskedCandidate>, comments: Vec<String> },
-    NoEbuilds { atom: String },
-    Ambiguous { name: String, options: Vec<String> },
+    Masked {
+        atom: String,
+        candidates: Vec<MaskedCandidate>,
+        comments: Vec<String>,
+    },
+    NoEbuilds {
+        atom: String,
+    },
+    Ambiguous {
+        name: String,
+        options: Vec<String>,
+    },
     SlotConflict(SlotConflict),
-    Blocker { blocker: String, blocked: String, hard: bool, resolved: bool },
-    RequiredUse { pkg: String, constraint: Vec<String>, use_line: String },
-    Circular { lines: Vec<String>, use_fixes: Vec<(String, String)> },
-    Unsatisfied { lines: Vec<String> },
+    Blocker {
+        blocker: String,
+        blocked: String,
+        hard: bool,
+        resolved: bool,
+    },
+    RequiredUse {
+        pkg: String,
+        constraint: Vec<String>,
+        use_line: String,
+    },
+    Circular {
+        lines: Vec<String>,
+        use_fixes: Vec<(String, String)>,
+    },
+    Unsatisfied {
+        lines: Vec<String>,
+    },
     /// "One or more updates/rebuilds have been skipped due to a dependency conflict"
-    Skipped { slot_key: String, candidate: String, required: Vec<(String, String)> },
+    Skipped {
+        slot_key: String,
+        candidate: String,
+        required: Vec<(String, String)>,
+    },
     PreservedLibs,
-    News { count: usize },
-    ConfigUpdates { count: usize },
-    Generic { title: String, lines: Vec<String> },
+    News {
+        count: usize,
+    },
+    ConfigUpdates {
+        count: usize,
+    },
+    Generic {
+        title: String,
+        lines: Vec<String>,
+    },
 }
 
 impl Problem {
@@ -347,7 +381,9 @@ pub fn parse(output: &str, exit_code: Option<i32>) -> Plan {
                 let l = lines[i].trim();
                 if l.is_empty() {
                     // A blank line ends the block once we've seen entries.
-                    if plan.suggestions.last().is_some_and(|s| s.kind == kind) && !lines.get(i + 1).is_some_and(|n| n.trim().starts_with('#') || looks_like_conf_line(n.trim())) {
+                    if plan.suggestions.last().is_some_and(|s| s.kind == kind)
+                        && !lines.get(i + 1).is_some_and(|n| n.trim().starts_with('#') || looks_like_conf_line(n.trim()))
+                    {
                         break;
                     }
                     i += 1;
@@ -475,7 +511,10 @@ pub fn parse(output: &str, exit_code: Option<i32>) -> Plan {
             while i < lines.len() {
                 let l = lines[i];
                 let lt = l.trim();
-                if lt.starts_with("It may be possible to solve") || lt.starts_with("NOTE: Use the '--verbose-conflicts'") || lt.starts_with("!!! Enabling --newuse") {
+                if lt.starts_with("It may be possible to solve")
+                    || lt.starts_with("NOTE: Use the '--verbose-conflicts'")
+                    || lt.starts_with("!!! Enabling --newuse")
+                {
                     break;
                 }
                 if lt.starts_with("!!!") && current.is_none() {

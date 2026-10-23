@@ -14,10 +14,17 @@ use std::time::Instant;
 #[derive(Debug, Clone)]
 pub enum JobKind {
     Generic,
-    Pretend { opts: EmergeOptions },
-    Emerge { opts: EmergeOptions, tracker: Box<Tracker> },
+    Pretend {
+        opts: EmergeOptions,
+    },
+    Emerge {
+        opts: EmergeOptions,
+        tracker: Box<Tracker>,
+    },
     Sync,
-    Capture { tag: String },
+    Capture {
+        tag: String,
+    },
     /// Background `emerge -uDN @world --pretend` for the Store's update list.
     WorldCheck,
     /// Root-only boot files (JSON from the helper).
@@ -25,11 +32,15 @@ pub enum JobKind {
     /// Something that changed boot files: re-check afterwards.
     BootFix,
     /// `emerge --pretend --depclean`, eclean-* --pretend for the Cleanup page.
-    CleanupScan { tag: String },
+    CleanupScan {
+        tag: String,
+    },
     /// mount -o remount of a boot partition.
     Remount,
     /// Undo of a recorded change (helper transaction).
-    Undo { tx: String },
+    Undo {
+        tx: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -198,7 +209,9 @@ impl Batch {
                 Step::Send(Op::Rollback { transaction: t, force: true }, None)
             }
             (TxPhase::Committing(_), Ok(())) => Step::Done,
-            (TxPhase::Committing(_), Err(e)) => Step::Failed { error: format!("changes were saved, but recording them for undo failed: {e}"), rolled_back: false },
+            (TxPhase::Committing(_), Err(e)) => {
+                Step::Failed { error: format!("changes were saved, but recording them for undo failed: {e}"), rolled_back: false }
+            }
             (TxPhase::RollingBack(_, e), Ok(())) => Step::Failed { error: e, rolled_back: true },
             (TxPhase::RollingBack(_, e), Err(e2)) => Step::Failed { error: format!("{e}; undoing the earlier steps also failed: {e2}"), rolled_back: false },
             (TxPhase::None, Ok(())) => {

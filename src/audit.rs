@@ -44,10 +44,7 @@ pub fn path_for(root: &Path) -> PathBuf {
 
 /// The real user behind a privileged session.
 pub fn session_uid() -> u32 {
-    ["PKEXEC_UID", "SUDO_UID"]
-        .iter()
-        .find_map(|k| std::env::var(k).ok().and_then(|v| v.parse().ok()))
-        .unwrap_or_else(|| unsafe { libc::getuid() })
+    ["PKEXEC_UID", "SUDO_UID"].iter().find_map(|k| std::env::var(k).ok().and_then(|v| v.parse().ok())).unwrap_or_else(|| unsafe { libc::getuid() })
 }
 
 /// The log is rotated to `audit.log.1` when it grows past this.
@@ -59,9 +56,10 @@ impl Audit {
         if std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file() && m.len() > ROTATE_BYTES) {
             let _ = std::fs::rename(&path, path.with_extension("log.1"));
         }
-        let file = path.parent().and_then(|d| std::fs::DirBuilder::new().recursive(true).mode(0o755).create(d).ok()).and_then(|_| {
-            std::fs::OpenOptions::new().append(true).create(true).mode(0o644).custom_flags(libc::O_NOFOLLOW).open(&path).ok()
-        });
+        let file = path
+            .parent()
+            .and_then(|d| std::fs::DirBuilder::new().recursive(true).mode(0o755).create(d).ok())
+            .and_then(|_| std::fs::OpenOptions::new().append(true).create(true).mode(0o644).custom_flags(libc::O_NOFOLLOW).open(&path).ok());
         Audit { path, file: Mutex::new(file), uid: session_uid() }
     }
 

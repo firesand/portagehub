@@ -178,7 +178,8 @@ mod tests {
 
     #[test]
     fn failed_batch_is_rolled_back_not_undone() {
-        let records = vec![rec("begin", 1, Some("t"), "", "Batch"), rec("request", 2, Some("t"), "write_file", "write x"), rec("rollback", 3, Some("t"), "", "Batch")];
+        let records =
+            vec![rec("begin", 1, Some("t"), "", "Batch"), rec("request", 2, Some("t"), "write_file", "write x"), rec("rollback", 3, Some("t"), "", "Batch")];
         let log = summarize(&records);
         assert_eq!(log.changes[0].state, ChangeState::RolledBack);
         assert!(!log.changes[0].can_undo());

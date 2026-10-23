@@ -56,13 +56,21 @@ impl App {
             (format!("{} root", icon::SHIELD_CHECK), GREEN, "PortageHub itself runs as root.".to_string())
         } else {
             match &self.exec.helper_state {
-                HelperState::Ready => (format!("{} Admin session", icon::LOCK_OPEN), GREEN, "Privileged actions run through the helper without asking again.".into()),
+                HelperState::Ready => {
+                    (format!("{} Admin session", icon::LOCK_OPEN), GREEN, "Privileged actions run through the helper without asking again.".into())
+                }
                 HelperState::Starting => (format!("{} Authenticating…", icon::HOURGLASS), YELLOW, "Waiting for the polkit password dialog.".into()),
                 HelperState::Failed(e) => (format!("{} Not authorized", icon::LOCK), RED, format!("Last attempt failed: {e}\nClick to retry.")),
-                HelperState::NotStarted => (format!("{} User mode", icon::LOCK), TEXT_DIM, "Browsing works without root. Click to unlock privileged actions (one password prompt per session).".into()),
+                HelperState::NotStarted => (
+                    format!("{} User mode", icon::LOCK),
+                    TEXT_DIM,
+                    "Browsing works without root. Click to unlock privileged actions (one password prompt per session).".into(),
+                ),
             }
         };
-        let r = ui.add(egui::Button::new(RichText::new(txt).color(col).size(13.0)).fill(Color32::from_rgb(0x22, 0x28, 0x33)).corner_radius(CornerRadius::same(12))).on_hover_text(tip);
+        let r = ui
+            .add(egui::Button::new(RichText::new(txt).color(col).size(13.0)).fill(Color32::from_rgb(0x22, 0x28, 0x33)).corner_radius(CornerRadius::same(12)))
+            .on_hover_text(tip);
         if r.clicked() {
             self.push(Action::StartHelper);
         }
@@ -86,13 +94,7 @@ impl App {
                 ui.add(egui::Spinner::new().size(14.0).color(ACCENT));
                 ui.label(w::dim(format!("Loading {}…", busy.join(", "))));
             } else if let Some(c) = &self.data.catalog {
-                ui.label(w::dim(format!(
-                    "{} {} packages · {} ebuilds in {} repos",
-                    icon::DATABASE,
-                    c.pkgs.len(),
-                    c.ebuild_count,
-                    c.repo_locations.len()
-                )));
+                ui.label(w::dim(format!("{} {} packages · {} ebuilds in {} repos", icon::DATABASE, c.pkgs.len(), c.ebuild_count, c.repo_locations.len())));
                 if let Some(v) = &self.data.vdb {
                     ui.label(w::dim(format!("· {} installed", v.pkgs.len())));
                 }
@@ -107,7 +109,9 @@ impl App {
                     ui.label(RichText::new(format!("{} {} active", icon::CIRCLE_NOTCH, running)).color(ACCENT));
                 }
                 let emerge = self.running_emerge().map(|j| match &j.kind {
-                    JobKind::Emerge { tracker, .. } => Some((tracker.fraction(), tracker.counts(), tracker.total, tracker.remaining(), tracker.elapsed(), tracker.last_status.clone())),
+                    JobKind::Emerge { tracker, .. } => {
+                        Some((tracker.fraction(), tracker.counts(), tracker.total, tracker.remaining(), tracker.elapsed(), tracker.last_status.clone()))
+                    }
                     _ => None,
                 });
                 if let Some(Some((frac, (done, _failed, _active), total, rem, el, status))) = emerge {
@@ -260,7 +264,11 @@ impl App {
                         cancel = true;
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(w::dim(if self.exec.root_ready() { "Runs as root through the admin session" } else { "You will be asked for your password once" }));
+                        ui.label(w::dim(if self.exec.root_ready() {
+                            "Runs as root through the admin session"
+                        } else {
+                            "You will be asked for your password once"
+                        }));
                     });
                 });
             });

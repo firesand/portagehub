@@ -181,13 +181,8 @@ pub fn scan(text: &str) -> Vec<(String, String, (usize, usize))> {
 pub fn load() -> MakeConf {
     let base = Path::new(MAKE_CONF);
     let files: Vec<PathBuf> = if base.is_dir() {
-        let mut v: Vec<PathBuf> = std::fs::read_dir(base)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_file() && !p.to_string_lossy().ends_with('~'))
-            .collect();
+        let mut v: Vec<PathBuf> =
+            std::fs::read_dir(base).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_file() && !p.to_string_lossy().ends_with('~')).collect();
         v.sort();
         v
     } else {

@@ -45,14 +45,14 @@ fn openat2(dir: &OwnedFd, rel: &Path, flags: i32, mode: u32) -> io::Result<Owned
     how.flags = (flags | libc::O_CLOEXEC) as u64;
     how.mode = mode as u64;
     how.resolve = libc::RESOLVE_BENEATH | libc::RESOLVE_NO_SYMLINKS | libc::RESOLVE_NO_MAGICLINKS | libc::RESOLVE_NO_XDEV;
-    let fd = unsafe {
-        libc::syscall(libc::SYS_openat2, dir.as_raw_fd(), c.as_ptr(), &how as *const libc::open_how, std::mem::size_of::<libc::open_how>())
-    };
+    let fd = unsafe { libc::syscall(libc::SYS_openat2, dir.as_raw_fd(), c.as_ptr(), &how as *const libc::open_how, std::mem::size_of::<libc::open_how>()) };
     if fd < 0 {
         let e = io::Error::last_os_error();
         // ELOOP: a symlink on the way; EXDEV: escaping the tree.
         return Err(match e.raw_os_error() {
-            Some(libc::ELOOP) | Some(libc::EXDEV) => io::Error::new(io::ErrorKind::PermissionDenied, format!("{}: refusing to follow a symlink or leave the directory", rel.display())),
+            Some(libc::ELOOP) | Some(libc::EXDEV) => {
+                io::Error::new(io::ErrorKind::PermissionDenied, format!("{}: refusing to follow a symlink or leave the directory", rel.display()))
+            }
             _ => e,
         });
     }
@@ -193,9 +193,20 @@ impl Beneath {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{} is a directory", rel.display())));
         }
         let mode = mode.or(existing.map(|(m, _)| m)).unwrap_or(0o644);
-        let tmp_name = format!(".portagehub-{}-{}.tmp~", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+        let tmp_name = format!(
+            ".portagehub-{}-{}.tmp~",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+        );
         let tmp = cstr(Path::new(&tmp_name))?;
-        let fd = unsafe { libc::openat(parent.as_raw_fd(), tmp.as_ptr(), libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC, 0o600 as libc::c_uint) };
+        let fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                tmp.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600 as libc::c_uint,
+            )
+        };
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }

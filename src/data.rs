@@ -196,9 +196,10 @@ impl PkgDetail {
 fn user_flags(cfg: Option<&PortageConfig>, kind: ConfKind, cat: &str, pn: &str, ver: &Version, slot: &str, repo: &str) -> bool {
     let Some(cfg) = cfg else { return false };
     let Some(set) = cfg.set(kind) else { return false };
-    set.files.iter().filter(|f| !f.ignored).any(|f| {
-        f.entries().any(|(_, e)| !e.disabled && e.atom.as_ref().is_some_and(|a| a.matches(cat, pn, ver, Some(slot), Some(repo))))
-    })
+    set.files
+        .iter()
+        .filter(|f| !f.ignored)
+        .any(|f| f.entries().any(|(_, e)| !e.disabled && e.atom.as_ref().is_some_and(|a| a.matches(cat, pn, ver, Some(slot), Some(repo)))))
 }
 
 /// Keyword tokens the user's package.accept_keywords (and legacy package.keywords)
@@ -242,11 +243,7 @@ pub fn build_detail(key: &str, data: &Data) -> Option<PkgDetail> {
     let pkg = catalog.get(key)?;
     let arch = data.arch();
     let cfg = data.config.as_deref();
-    let installed: HashSet<String> = data
-        .vdb
-        .as_ref()
-        .map(|v| v.installed(key).iter().map(|i| i.ver.raw.clone()).collect())
-        .unwrap_or_default();
+    let installed: HashSet<String> = data.vdb.as_ref().map(|v| v.installed(key).iter().map(|i| i.ver.raw.clone()).collect()).unwrap_or_default();
     let mut versions = Vec::new();
     for e in pkg.ebuilds.iter().rev() {
         let Some(loc) = catalog.repo_location(&e.repo) else { continue };
@@ -256,11 +253,8 @@ pub fn build_detail(key: &str, data: &Data) -> Option<PkgDetail> {
         let ver = e.ver.clone();
         let accepted = user_keywords(cfg, &pkg.cat, &pkg.pn, &ver, &slot, &e.repo, &arch);
         let keyworded = keywords_accept(kw, &accepted, &arch);
-        let profile_mask = data
-            .masks
-            .as_ref()
-            .and_then(|m| m.masked(&pkg.cat, &pkg.pn, &ver, Some(&slot), Some(&e.repo)))
-            .map(|m| (m.source.clone(), m.reason.clone()));
+        let profile_mask =
+            data.masks.as_ref().and_then(|m| m.masked(&pkg.cat, &pkg.pn, &ver, Some(&slot), Some(&e.repo))).map(|m| (m.source.clone(), m.reason.clone()));
         versions.push(VersionInfo {
             profile_mask,
             ebuild_path: metadata::ebuild_path(loc, &pkg.cat, &pkg.pn, &e.ver.raw),
@@ -330,11 +324,8 @@ pub fn compute_updates(data: &Data) -> Vec<UpdateCandidate> {
         for &i in idx {
             let inst = &vdb.pkgs[i];
             let slot = inst.main_slot().to_string();
-            let best = detail
-                .versions
-                .iter()
-                .filter(|v| !v.ver.is_live() && v.meta.slot().split('/').next() == Some(slot.as_str()))
-                .find(|v| v.visible(testing));
+            let best =
+                detail.versions.iter().filter(|v| !v.ver.is_live() && v.meta.slot().split('/').next() == Some(slot.as_str())).find(|v| v.visible(testing));
             if let Some(b) = best
                 && b.ver > inst.ver
                 && !inst.ver.is_live()
@@ -462,9 +453,7 @@ pub fn classify(c: &UpdateCandidate, plan: Option<&crate::portage::pretend::Plan
     let Some(plan) = plan else {
         return if c.held_by.is_empty() { UpdState::Unknown } else { UpdState::HeldBack(held()) };
     };
-    let updated = plan.merge_entries().any(|e| {
-        e.key == c.key && e.version != c.installed && (e.slot.is_empty() || e.slot.split('/').next() == Some(slot))
-    });
+    let updated = plan.merge_entries().any(|e| e.key == c.key && e.version != c.installed && (e.slot.is_empty() || e.slot.split('/').next() == Some(slot)));
     if updated {
         return UpdState::WillUpdate;
     }

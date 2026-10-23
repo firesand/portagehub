@@ -277,7 +277,9 @@ impl Server {
     }
 
     fn record(&self, tx: &str, logical_base: &str, base: &Beneath, rel: &Path) -> Result<(), String> {
-        self.journal.record(tx, &format!("{logical_base}/{}", rel.display()), base, rel).map_err(|e| format!("cannot save {logical_base}/{} for undo: {e}", rel.display()))
+        self.journal
+            .record(tx, &format!("{logical_base}/{}", rel.display()), base, rel)
+            .map_err(|e| format!("cannot save {logical_base}/{} for undo: {e}", rel.display()))
     }
 
     // ------------------------------------------------------------------
@@ -445,9 +447,5 @@ pub fn resolve_program(name: &str) -> Option<String> {
     if !protocol::ALLOWED_PROGRAMS.contains(&base) {
         return None;
     }
-    protocol::PROGRAM_DIRS
-        .iter()
-        .map(|d| PathBuf::from(d).join(base))
-        .find(|p| p.is_file())
-        .map(|p| p.to_string_lossy().into_owned())
+    protocol::PROGRAM_DIRS.iter().map(|d| PathBuf::from(d).join(base)).find(|p| p.is_file()).map(|p| p.to_string_lossy().into_owned())
 }

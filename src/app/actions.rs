@@ -66,9 +66,9 @@ impl App {
                     self.toast(ToastKind::Warn, "Another emerge is already running. Wait for it to finish.");
                     return;
                 }
-                let touches_boot = planned.iter().any(|(cpv, _, _)| {
-                    crate::portage::atom::split_cpv(cpv).is_some_and(|(c, p, _)| crate::portage::mounts::touches_boot(&format!("{c}/{p}")))
-                });
+                let touches_boot = planned
+                    .iter()
+                    .any(|(cpv, _, _)| crate::portage::atom::split_cpv(cpv).is_some_and(|(c, p, _)| crate::portage::mounts::touches_boot(&format!("{c}/{p}"))));
                 if touches_boot && self.settings.boot_auto_remount {
                     self.invalidate_mounts();
                     let blocked: Vec<crate::portage::mounts::BootMount> = self.boot_mounts().into_iter().filter(|m| m.blocks_writes()).collect();
@@ -79,7 +79,13 @@ impl App {
                             }
                         }
                         let ops = blocked.iter().map(|m| Op::Remount { target: m.target.clone(), rw: true }).collect();
-                        self.toast(ToastKind::Info, format!("Making {} writable for the kernel/bootloader update…", blocked.iter().map(|m| m.target.as_str()).collect::<Vec<_>>().join(", ")));
+                        self.toast(
+                            ToastKind::Info,
+                            format!(
+                                "Making {} writable for the kernel/bootloader update…",
+                                blocked.iter().map(|m| m.target.as_str()).collect::<Vec<_>>().join(", ")
+                            ),
+                        );
                         self.apply(Action::Batch {
                             title: "Prepare boot partitions".into(),
                             ops,
@@ -151,7 +157,8 @@ impl App {
                 self.jobs.push(Job::new(id, title, kind, Priv::Root, vec![format!("helper: {label}")], reload));
                 if needs_new_helper && !self.exec.is_root && self.exec.helper_state == HelperState::Ready {
                     let ji = self.jobs.len() - 1;
-                    self.jobs[ji].error = Some("the installed admin helper is too old for this action — run sudo dist/install.sh, then restart PortageHub".into());
+                    self.jobs[ji].error =
+                        Some("the installed admin helper is too old for this action — run sudo dist/install.sh, then restart PortageHub".into());
                     self.jobs[ji].ended = Some(Instant::now());
                     self.finish_job(ji);
                 } else {
@@ -237,7 +244,10 @@ impl App {
             self.toast(ToastKind::Success, "Boot check after the kernel/driver update: everything is in place.");
         } else {
             for f in bad.iter().take(3) {
-                self.toast(if f.severity == Severity::Error { ToastKind::Error } else { ToastKind::Warn }, format!("{} — open Maintenance → Kernels & Boot", f.title));
+                self.toast(
+                    if f.severity == Severity::Error { ToastKind::Error } else { ToastKind::Warn },
+                    format!("{} — open Maintenance → Kernels & Boot", f.title),
+                );
             }
         }
     }
@@ -252,7 +262,10 @@ impl App {
         if self.settings.kernel_mark_requires_nvidia && ks.nvidia.gpu && ks.nvidia.drivers.is_some() {
             let ok = std::process::Command::new("nvidia-smi").arg("-L").output().is_ok_and(|o| o.status.success());
             if !ok {
-                self.toast(ToastKind::Error, "nvidia-smi failed: the NVIDIA driver does not work on this kernel, so it is not marked known-good. Rebuild nvidia-drivers first.");
+                self.toast(
+                    ToastKind::Error,
+                    "nvidia-smi failed: the NVIDIA driver does not work on this kernel, so it is not marked known-good. Rebuild nvidia-drivers first.",
+                );
                 return;
             }
         }
@@ -264,11 +277,8 @@ impl App {
             Some(l) if *l != kver => Some(l.clone()),
             _ => ks.previous_good.clone(),
         };
-        let mut ops = vec![Op::MarkGood {
-            kver: kver.clone(),
-            state_dir: ks.state_dir.to_string_lossy().to_string(),
-            backup: self.settings.kernel_backup_on_mark,
-        }];
+        let mut ops =
+            vec![Op::MarkGood { kver: kver.clone(), state_dir: ks.state_dir.to_string_lossy().to_string(), backup: self.settings.kernel_backup_on_mark }];
         if self.settings.kernel_protect {
             let atoms = crate::portage::kernel::wanted_keep_atoms(&ks, Some(&kver), new_prev.as_deref());
             let mut content = String::from("# Proven-good kernels protected from --depclean. Managed by PortageHub (same format as kernel-mark-good).\n");
@@ -281,12 +291,7 @@ impl App {
                 ops.push(Op::Run { argv: vec!["emerge".into(), "--noreplace".into(), "--ask=n".into(), format!("@{}", ks.keep_set)], env: vec![], cwd: None });
             }
         }
-        self.apply(Action::Batch {
-            title: format!("Mark {kver} as known-good"),
-            ops,
-            reload: vec![Reload::Kernels, Reload::Config, Reload::Vdb],
-            then: None,
-        });
+        self.apply(Action::Batch { title: format!("Mark {kver} as known-good"), ops, reload: vec![Reload::Kernels, Reload::Config, Reload::Vdb], then: None });
     }
 
     /// PORTAGE_TMPDIR for a package, honouring package.env overrides (e.g. a "notmpfs" env file).

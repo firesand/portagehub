@@ -60,9 +60,7 @@ impl ConfKind {
 
     pub fn path(&self) -> PathBuf {
         match self {
-            ConfKind::ProfileUseMask | ConfKind::ProfileUseForce | ConfKind::ProfileProvided => {
-                Path::new(ETC_PORTAGE).join("profile").join(self.file_name())
-            }
+            ConfKind::ProfileUseMask | ConfKind::ProfileUseForce | ConfKind::ProfileProvided => Path::new(ETC_PORTAGE).join("profile").join(self.file_name()),
             _ => Path::new(ETC_PORTAGE).join(self.file_name()),
         }
     }
@@ -135,19 +133,33 @@ impl ConfKind {
 
     pub fn explain(&self) -> &'static str {
         match self {
-            ConfKind::Use => "Turn optional features (USE flags) on or off for single packages. A flag written as `flag` enables it, `-flag` disables it. This overrides the global USE in make.conf and your profile defaults for the matching packages only.",
-            ConfKind::AcceptKeywords => "Allow versions that are not marked stable for your architecture. `~amd64` accepts the testing branch, `**` accepts any keyword (including live 9999 ebuilds without keywords). An entry without keywords means \"accept ~ARCH\".",
-            ConfKind::Mask => "Forbid Portage from installing the matching versions, even if they are stable. Typical use: keep a package below a certain version (`>=cat/pkg-2`).",
-            ConfKind::Unmask => "Lift a mask set by your profile or a repository (package.mask), e.g. for packages masked for testing or removal. Unmasking does not accept keywords — combine with Accept keywords for testing versions.",
-            ConfKind::License => "Accept software licenses for single packages when ACCEPT_LICENSE in make.conf does not already include them. Values can be license names or groups like @BINARY-REDISTRIBUTABLE.",
+            ConfKind::Use => {
+                "Turn optional features (USE flags) on or off for single packages. A flag written as `flag` enables it, `-flag` disables it. This overrides the global USE in make.conf and your profile defaults for the matching packages only."
+            }
+            ConfKind::AcceptKeywords => {
+                "Allow versions that are not marked stable for your architecture. `~amd64` accepts the testing branch, `**` accepts any keyword (including live 9999 ebuilds without keywords). An entry without keywords means \"accept ~ARCH\"."
+            }
+            ConfKind::Mask => {
+                "Forbid Portage from installing the matching versions, even if they are stable. Typical use: keep a package below a certain version (`>=cat/pkg-2`)."
+            }
+            ConfKind::Unmask => {
+                "Lift a mask set by your profile or a repository (package.mask), e.g. for packages masked for testing or removal. Unmasking does not accept keywords — combine with Accept keywords for testing versions."
+            }
+            ConfKind::License => {
+                "Accept software licenses for single packages when ACCEPT_LICENSE in make.conf does not already include them. Values can be license names or groups like @BINARY-REDISTRIBUTABLE."
+            }
             ConfKind::Env => "Apply environment files from /etc/portage/env/ (e.g. different CFLAGS, MAKEOPTS, FEATURES) to matching packages only.",
             ConfKind::Properties => "Accept ebuild PROPERTIES such as `interactive` or `live` per package (ACCEPT_PROPERTIES).",
             ConfKind::AcceptRestrict => "Accept ebuild RESTRICT tokens per package (ACCEPT_RESTRICT), e.g. allow `bindist` restricted packages.",
             ConfKind::Keywords => "Deprecated older name for package.accept_keywords. Portage still reads it, but new entries belong in Accept keywords.",
             ConfKind::Sets => "Your own package sets. Each file below /etc/portage/sets/ becomes a set named @filename that can be emerged as a group.",
             ConfKind::ProfileUseMask => "/etc/portage/profile/package.use.mask — mask (or with -flag unmask) USE flags for packages, overriding the profile.",
-            ConfKind::ProfileUseForce => "/etc/portage/profile/package.use.force — force (or with -flag unforce) USE flags for packages, overriding the profile.",
-            ConfKind::ProfileProvided => "/etc/portage/profile/package.provided — tell Portage a package version is provided outside of Portage. Exact versions only (no operators).",
+            ConfKind::ProfileUseForce => {
+                "/etc/portage/profile/package.use.force — force (or with -flag unforce) USE flags for packages, overriding the profile."
+            }
+            ConfKind::ProfileProvided => {
+                "/etc/portage/profile/package.provided — tell Portage a package version is provided outside of Portage. Exact versions only (no operators)."
+            }
         }
     }
 
@@ -230,11 +242,7 @@ impl Entry {
                 if !off.is_empty() {
                     parts.push(format!("disable {}", off.join(", ")));
                 }
-                if parts.is_empty() {
-                    format!("No flags set for {target}")
-                } else {
-                    format!("{} for {target}", capitalize(&parts.join(" and ")))
-                }
+                if parts.is_empty() { format!("No flags set for {target}") } else { format!("{} for {target}", capitalize(&parts.join(" and "))) }
             }
             ConfKind::AcceptKeywords | ConfKind::Keywords => {
                 if self.values.is_empty() {
@@ -402,11 +410,7 @@ impl ConfSet {
 
     /// Where a new entry goes by default.
     pub fn default_target(&self, preferred_name: &str) -> PathBuf {
-        if self.is_dir || !self.exists {
-            self.base.join(preferred_name)
-        } else {
-            self.base.clone()
-        }
+        if self.is_dir || !self.exists { self.base.join(preferred_name) } else { self.base.clone() }
     }
 }
 
@@ -452,7 +456,10 @@ pub struct EnvFile {
 #[derive(Debug, Clone, PartialEq)]
 pub enum StrayReason {
     /// e.g. `package.accept_keywordschatgpt-desktop`: Portage never reads it.
-    Misnamed { kind: ConfKind, suggested_name: String },
+    Misnamed {
+        kind: ConfKind,
+        suggested_name: String,
+    },
     Backup,
     Unknown,
 }
@@ -533,7 +540,11 @@ pub fn find_strays() -> Vec<Stray> {
             Some(k) => {
                 let rest = name[k.len()..].trim_matches(|c| c == '.' || c == '-' || c == '_' || c == '~');
                 let lower = rest.to_lowercase();
-                if rest.is_empty() || ["backup", "bak", "old", "orig", "save", "dpkg-old"].iter().any(|b| lower == *b || lower.starts_with(&format!("{b}.")) || lower.ends_with(b)) {
+                if rest.is_empty()
+                    || ["backup", "bak", "old", "orig", "save", "dpkg-old"]
+                        .iter()
+                        .any(|b| lower == *b || lower.starts_with(&format!("{b}.")) || lower.ends_with(b))
+                {
                     StrayReason::Backup
                 } else {
                     StrayReason::Misnamed { kind: ConfKind::from_file_name(k).unwrap_or(ConfKind::Use), suggested_name: rest.to_string() }

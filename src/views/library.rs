@@ -130,10 +130,12 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                             let collapsed = app.library.collapsed.contains(cat);
                             let ic = if collapsed { icon::CARET_RIGHT } else { icon::CARET_DOWN };
                             let resp = ui.add(
-                                egui::Button::new(RichText::new(format!("{ic}  {}  ({n})", cat.to_uppercase())).size(11.5).family(theme::bold()).color(TEXT_DIM))
-                                    .frame(false)
-                                    .min_size(egui::vec2(ui.available_width(), 30.0))
-                                    .right_text(""),
+                                egui::Button::new(
+                                    RichText::new(format!("{ic}  {}  ({n})", cat.to_uppercase())).size(11.5).family(theme::bold()).color(TEXT_DIM),
+                                )
+                                .frame(false)
+                                .min_size(egui::vec2(ui.available_width(), 30.0))
+                                .right_text(""),
                             );
                             if resp.clicked() {
                                 if collapsed {
