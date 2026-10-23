@@ -311,13 +311,25 @@ fn updates_section(app: &mut App, ui: &mut Ui) {
             if cards.is_empty() {
                 ui.label(w::dim(format!("{} Everything installed is at the newest version you allow.", icon::CHECK_CIRCLE)));
             } else {
-                egui::ScrollArea::horizontal().id_salt("upd-row").show(ui, |ui| {
-                    ui.horizontal_top(|ui| {
-                        for (c, st) in cards.iter().take(60) {
-                            update_card(app, ui, c, st);
-                        }
-                    });
-                });
+                // One list, top to bottom, grouped by what emerge does with each package.
+                let groups: [(&str, fn(&UpdState) -> bool); 5] = [
+                    ("In the @world update", |s| matches!(s, UpdState::WillUpdate)),
+                    ("Not checked with emerge yet", |s| matches!(s, UpdState::Unknown)),
+                    ("Skipped by emerge", |s| matches!(s, UpdState::Skipped(_))),
+                    ("Held back by another package or set", |s| matches!(s, UpdState::HeldBack(_))),
+                    ("Not needed by @world (depclean would remove)", |s| matches!(s, UpdState::NotNeeded)),
+                ];
+                for (title, pred) in groups {
+                    let rows: Vec<&(crate::data::UpdateCandidate, UpdState)> = cards.iter().filter(|(_, st)| pred(st)).collect();
+                    if rows.is_empty() {
+                        continue;
+                    }
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(format!("{} ({})", title.to_uppercase(), rows.len())).size(11.5).family(theme::bold()).color(TEXT_DIM));
+                    for (c, st) in rows {
+                        update_row(app, ui, c, st);
+                    }
+                }
             }
             // Rebuilds and new dependencies from emerge's plan.
             if let Some(p) = plan_ref {
@@ -375,20 +387,45 @@ fn rebuild_reason(e: &crate::portage::pretend::PlanEntry) -> String {
     "rebuild because a library it uses changed (slot/sub-slot)".into()
 }
 
-fn update_card(app: &mut App, ui: &mut Ui, c: &crate::data::UpdateCandidate, st: &crate::data::UpdState) {
+/// One update as a full-width row (Steam download-queue style).
+fn update_row(app: &mut App, ui: &mut Ui, c: &crate::data::UpdateCandidate, st: &crate::data::UpdState) {
     use crate::data::UpdState;
     let key = c.key.as_str();
     let (cat, pn) = key.split_once('/').unwrap_or(("", key));
-    let size = egui::vec2(210.0, 150.0);
-    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
-    let p = ui.painter();
-    let base = common::category_color(cat);
-    let top = egui::Rect::from_min_size(rect.min, egui::vec2(size.x, 88.0));
+    let h = 50.0;
+    let width = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, h), Sense::click());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
     let dimmed = matches!(st, UpdState::NotNeeded | UpdState::HeldBack(_) | UpdState::Skipped(_));
+    let p = ui.painter();
+    p.rect_filled(rect.shrink2(egui::vec2(0.0, 1.5)), CornerRadius::same(2), if resp.hovered() { CARD_HOVER } else { CARD });
+    let tile = egui::Rect::from_min_size(rect.min + egui::vec2(6.0, 6.0), egui::vec2(h - 12.0, h - 12.0));
+    let base = common::category_color(cat);
     let base = if dimmed { w::lerp_color(base, Color32::from_rgb(0x30, 0x38, 0x44), 0.6) } else { base };
-    w::paint_vgradient(p, top, w::lerp_color(base, WHITE, 0.15), w::lerp_color(base, Color32::BLACK, 0.3));
-    p.text(top.center(), egui::Align2::CENTER_CENTER, common::category_icon(cat), FontId::proportional(40.0), Color32::from_white_alpha(if dimmed { 110 } else { 200 }));
-    // Status ribbon
+    w::paint_vgradient(p, tile, w::lerp_color(base, WHITE, 0.12), w::lerp_color(base, Color32::BLACK, 0.35));
+    p.text(tile.center(), egui::Align2::CENTER_CENTER, common::category_icon(cat), FontId::proportional(18.0), Color32::from_white_alpha(if dimmed { 120 } else { 220 }));
+    let x = tile.right() + 12.0;
+    let mut job = egui::text::LayoutJob::default();
+    job.append(pn, 0.0, egui::text::TextFormat { font_id: FontId::new(14.5, theme::medium()), color: if dimmed { TEXT } else { WHITE }, ..Default::default() });
+    job.append(&format!("   {cat}"), 0.0, egui::text::TextFormat { font_id: FontId::proportional(12.0), color: TEXT_FAINT, ..Default::default() });
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width * 0.35);
+    p.galley(egui::pos2(x, rect.top() + 7.0), ui.painter().layout_job(job), WHITE);
+    let ver = format!("{}  {}  {}   ::{}", c.installed, icon::ARROW_RIGHT, c.available, c.repo);
+    p.text(egui::pos2(x, rect.top() + 29.0), egui::Align2::LEFT_TOP, ver, FontId::proportional(12.5), if dimmed { TEXT_DIM } else { GREEN_TEXT });
+    // Reason in the middle-right, badge on the right.
+    let reason = match st {
+        UpdState::HeldBack(why) | UpdState::Skipped(why) => why.clone(),
+        UpdState::NotNeeded => "nothing in @world depends on it".to_string(),
+        _ => String::new(),
+    };
+    if !reason.is_empty() {
+        let mut rj = egui::text::LayoutJob::simple_singleline(reason, FontId::proportional(12.0), TEXT_DIM);
+        rj.wrap = egui::text::TextWrapping::truncate_at_width(width * 0.38);
+        let g = ui.painter().layout_job(rj);
+        p.galley(egui::pos2(rect.left() + width * 0.44, rect.center().y - g.size().y / 2.0), g, TEXT_DIM);
+    }
     let label = st.label();
     if !label.is_empty() {
         let (fg, bg) = match st {
@@ -398,26 +435,15 @@ fn update_card(app: &mut App, ui: &mut Ui, c: &crate::data::UpdateCandidate, st:
             _ => (TEXT, Color32::from_rgb(0x3a, 0x46, 0x55)),
         };
         let g = ui.painter().layout_no_wrap(label.to_string(), FontId::new(10.5, theme::bold()), fg);
-        let br = egui::Rect::from_min_size(top.min + egui::vec2(6.0, 6.0), g.size() + egui::vec2(10.0, 4.0));
+        let br = egui::Rect::from_min_size(egui::pos2(rect.right() - 14.0 - g.size().x - 10.0, rect.center().y - (g.size().y + 6.0) / 2.0), g.size() + egui::vec2(10.0, 6.0));
         p.rect_filled(br, CornerRadius::same(2), bg);
-        p.galley(br.min + egui::vec2(5.0, 2.0), g, fg);
-    }
-    let bottom = egui::Rect::from_min_max(egui::pos2(rect.left(), top.bottom()), rect.max);
-    p.rect_filled(bottom, CornerRadius::ZERO, if resp.hovered() { CARD_HOVER } else { CARD });
-    let mut j = egui::text::LayoutJob::simple_singleline(pn.to_string(), FontId::new(14.0, theme::medium()), WHITE);
-    j.wrap = egui::text::TextWrapping::truncate_at_width(size.x - 16.0);
-    p.galley(bottom.min + egui::vec2(8.0, 6.0), ui.painter().layout_job(j), WHITE);
-    let mut vj = egui::text::LayoutJob::simple_singleline(format!("{}  {}  {}", c.installed, icon::ARROW_RIGHT, c.available), FontId::proportional(12.0), if dimmed { TEXT_DIM } else { GREEN_TEXT });
-    vj.wrap = egui::text::TextWrapping::truncate_at_width(size.x - 16.0);
-    p.galley(bottom.min + egui::vec2(8.0, 30.0), ui.painter().layout_job(vj), GREEN_TEXT);
-    p.text(bottom.min + egui::vec2(8.0, 46.0), egui::Align2::LEFT_TOP, format!("::{}", c.repo), FontId::proportional(11.0), TEXT_FAINT);
-    if resp.hovered() {
-        p.rect_stroke(rect, CornerRadius::ZERO, egui::Stroke::new(1.0, ACCENT), egui::StrokeKind::Inside);
+        p.galley(br.min + egui::vec2(5.0, 3.0), g, fg);
     }
     let resp = resp.on_hover_ui(|ui| {
-        ui.set_max_width(360.0);
+        ui.set_max_width(380.0);
         ui.label(w::strong(format!("{key}  {} → {}", c.installed, c.available)));
         ui.label(st.explain());
+        ui.label(w::dim("Click to open · right-click for actions"));
     });
     if resp.clicked() {
         app.push(Action::Open(key.to_string()));

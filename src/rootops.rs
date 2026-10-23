@@ -2,7 +2,7 @@
 //! verbatim from the GUI: boot scan, bootloader updates, known-good kernel
 //! marking, kernel leftover removal and build-dir cleanup.
 
-use crate::protocol::{BootAction, BootScan, KERNEL_STATE_DIRS, ListEntry, Listing, PROGRAM_DIRS, ScannedFile, valid_kver};
+use crate::protocol::{BOOT_MOUNTPOINTS, BootAction, BootScan, KERNEL_STATE_DIRS, ListEntry, Listing, PROGRAM_DIRS, ScannedFile, valid_kver};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -355,4 +355,25 @@ pub fn clean_build_dirs(log: &dyn Fn(String)) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// `mount -o remount,rw|ro <target>` (or a fresh mount from fstab when it is
+/// not mounted) for one of the boot mount points.
+pub fn remount_argv(target: &str, rw: bool) -> Result<(String, Vec<String>), String> {
+    if !BOOT_MOUNTPOINTS.contains(&target) {
+        return Err(format!("{target} is not a boot mount point"));
+    }
+    let mounts = std::fs::read_to_string("/proc/mounts").unwrap_or_default();
+    let mounted = mounts.lines().any(|l| l.split_whitespace().nth(1) == Some(target));
+    let in_fstab = std::fs::read_to_string("/etc/fstab")
+        .unwrap_or_default()
+        .lines()
+        .any(|l| !l.trim_start().starts_with('#') && l.split_whitespace().nth(1) == Some(target));
+    if !mounted && !in_fstab {
+        return Err(format!("{target} is neither mounted nor in /etc/fstab"));
+    }
+    let prog = find_program(&["mount"]).ok_or("mount not found")?;
+    let mode = if rw { "rw" } else { "ro" };
+    let opts = if mounted { format!("remount,{mode}") } else { mode.to_string() };
+    Ok((prog, vec!["-o".into(), opts, target.to_string()]))
 }

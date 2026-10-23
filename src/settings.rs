@@ -41,6 +41,10 @@ pub struct Settings {
     pub nvidia_alerts: bool,
     /// Build logs older than this are offered for cleaning.
     pub log_keep_days: u32,
+    /// Remount read-only boot partitions read-write automatically before kernel/bootloader emerges.
+    pub boot_auto_remount: bool,
+    /// Put boot partitions that fstab mounts read-only back to read-only after the emerge.
+    pub boot_restore_ro: bool,
 }
 
 impl Default for Settings {
@@ -66,6 +70,8 @@ impl Default for Settings {
             boot_check_after_kernel: true,
             nvidia_alerts: true,
             log_keep_days: 30,
+            boot_auto_remount: false,
+            boot_restore_ro: true,
         }
     }
 }

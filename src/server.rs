@@ -56,6 +56,10 @@ impl Server {
             Op::RemoveKernelLeftovers { kver, old_only } => {
                 self.blocking(id, sink, move |log| rootops::remove_kernel_leftovers(&kver, old_only, log));
             }
+            Op::Remount { target, rw } => match rootops::remount_argv(&target, rw) {
+                Ok((program, args)) => self.spawn_tracked(id, &program, &args, &[], None, sink),
+                Err(e) => reply(Err(e)),
+            },
             Op::CleanBuildDirs => {
                 self.blocking(id, sink, rootops::clean_build_dirs);
             }

@@ -55,6 +55,8 @@ pub struct Executor {
     pub helper_path: Option<PathBuf>,
     /// The running helper reported a different version than the GUI.
     pub helper_outdated: bool,
+    /// (major, minor) of the running helper.
+    pub helper_version: (u32, u32),
 }
 
 pub fn find_helper() -> Option<PathBuf> {
@@ -89,6 +91,7 @@ impl Executor {
             user_pids: Arc::default(),
             helper_path: find_helper(),
             helper_outdated: false,
+            helper_version: portagehub::protocol::parse_version(Some(env!("CARGO_PKG_VERSION"))),
         }
     }
 
@@ -181,7 +184,7 @@ impl Executor {
 
     fn send_to_helper(&mut self, req: Request) {
         let id = req.id;
-        if self.helper_outdated && req.op.needs_v2() {
+        if req.op.min_helper() > self.helper_version {
             let _ = self.tx.send(ExecMsg::Event(Event::Err {
                 id,
                 msg: "the installed admin helper is too old for this action — run sudo dist/install.sh, then restart PortageHub".into(),
@@ -290,6 +293,7 @@ impl Executor {
     pub fn on_helper_ready(&mut self, version: Option<&str>) {
         self.helper_state = HelperState::Ready;
         self.helper_outdated = version != Some(env!("CARGO_PKG_VERSION"));
+        self.helper_version = portagehub::protocol::parse_version(version);
         while let Some(r) = self.queued.pop_front() {
             self.send_to_helper(r);
         }

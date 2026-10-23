@@ -10,6 +10,7 @@ pub mod history;
 pub mod kernel;
 pub mod makeconf;
 pub mod metadata;
+pub mod mounts;
 pub mod pretend;
 pub mod profile;
 pub mod progress;

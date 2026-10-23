@@ -69,6 +69,10 @@ explanations for newcomers and every expert option still within reach.
   marked. **NVIDIA**: checks that every kernel has an nvidia.ko matching the installed
   driver and alerts after kernel or driver updates, with the right rebuild option for
   dist-kernel and non-dist-kernel setups.
+- **Boot partition pre-flight** — when a preview contains kernel or bootloader packages,
+  PortageHub checks that /boot, /boot/efi and /efi are mounted read-write. A read-only
+  EFI partition (e.g. `ro` in fstab) is remounted with one click (`mount -o remount,rw`)
+  and locked again when the emerge finishes; an optional rule does both automatically.
 - **Maintenance → Cleanup** — unused packages (depclean scan with Keep/Remove per
   package), old kernels and /boot leftovers, distfiles and binary packages (eclean),
   old build logs, failed build directories, world-file entries for uninstalled
@@ -97,7 +101,8 @@ Browsing and previews run as your user. The first action that needs root starts
 The helper only runs Portage tools (`emerge`, `emaint`, `eselect`, `egencache`, …),
 writes only below `/etc/portage`, and otherwise only performs a few operations whose
 arguments it checks itself: accepting or discarding `._cfg` config updates below `/etc`,
-a read-only boot scan, grub-mkconfig/lilo/bootctl/dracut with fixed arguments, recording
+a read-only boot scan, grub-mkconfig/lilo/bootctl/dracut with fixed arguments, remounting
+only /boot, /boot/efi or /efi read-write/read-only, recording
 known-good kernels in `/var/lib/kernel-fallback` (or `/var/lib/portagehub/kernels`), and
 deleting files of kernels that no installed package owns (never the running or a
 known-good kernel). After updating PortageHub, run `sudo dist/install.sh` again — the

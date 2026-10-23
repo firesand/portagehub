@@ -236,6 +236,42 @@ fn kernels(app: &mut App, ui: &mut Ui) {
             ui.add_space(6.0);
         }
 
+        // Boot partitions
+        let mounts = app.boot_mounts();
+        if !mounts.is_empty() {
+            w::section(ui, "Boot partitions");
+            let pending = app.jobs.iter().any(|j| j.running() && matches!(j.kind, JobKind::Remount));
+            w::card().show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                for m in &mounts {
+                    ui.horizontal(|ui| {
+                        let (ic, col) = if m.blocks_writes() { (icon::LOCK, ORANGE) } else { (icon::LOCK_OPEN, GREEN_TEXT) };
+                        ui.label(RichText::new(ic).size(16.0).color(col));
+                        ui.label(RichText::new(&m.target).monospace().color(WHITE));
+                        ui.label(w::dim(format!("{} {} · {}{}", m.fstype, m.device, m.state_text(), if m.fstab_ro { " · read-only in fstab" } else { "" })));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if pending {
+                                ui.add(egui::Spinner::new().color(ACCENT));
+                            } else if m.blocks_writes() {
+                                if w::primary(ui, icon::LOCK_OPEN, if m.mounted { "Make writable" } else { "Mount" }).clicked() {
+                                    let restore = m.fstab_ro && app.settings.boot_restore_ro;
+                                    app.remount_boot(&m.target, true, restore);
+                                }
+                            } else if m.mounted && m.fstab_ro && w::button(ui, icon::LOCK, "Make read-only again").clicked() {
+                                app.remount_boot(&m.target, false, false);
+                            }
+                        });
+                    });
+                    if m.mounted && !m.ro && m.fstab_ro && app.running_emerge().is_none() && !app.remount_restore.contains(&m.target) {
+                        ui.label(RichText::new(format!("{} still writable — fstab mounts it read-only, so you probably want to lock it again.", m.target)).size(12.0).color(ORANGE));
+                    }
+                }
+                ui.label(w::dim(
+                    "Kernel and bootloader updates (installkernel, grub, bootctl) write here. A read-only partition is made writable from the emerge preview — or automatically, with the rule below — and locked again afterwards.",
+                ));
+            });
+        }
+
         // Findings
         w::section(ui, "Boot check");
         for f in &findings {
@@ -511,6 +547,8 @@ fn rules(app: &mut App, ui: &mut Ui, ks: &KernelState) {
             w::help(ui, "Besides the running and known-good kernels.");
             ui.add(egui::DragValue::new(&mut s.kernel_keep_newest).range(0..=6));
         });
+        w::switch_row(ui, &mut s.boot_auto_remount, "Make read-only boot partitions writable automatically", "Before an emerge that installs kernels or bootloaders, remount read-only /boot, /boot/efi or /efi read-write (mount -o remount,rw) without asking.");
+        w::switch_row(ui, &mut s.boot_restore_ro, "Lock them again after the emerge", "Partitions that fstab mounts read-only are remounted read-only when the emerge finishes.");
         w::switch_row(ui, &mut s.boot_check_after_kernel, "Check the boot setup after kernel updates", "After an emerge that touches sys-kernel/*, sys-boot/* or nvidia-drivers, re-read the boot menu and notify about problems.");
         w::switch_row(ui, &mut s.nvidia_alerts, "NVIDIA module alerts", "Warn when a kernel has no NVIDIA module, or one that doesn't match the installed driver version.");
         ui.label(w::dim(format!("Known-good state: {}/last-good and previous-good{}", ks.state_dir.display(), if ks.state_dir.starts_with("/var/lib/kernel-fallback") { " (shared with your kernel-mark-good script)" } else { "" })));

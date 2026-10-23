@@ -111,6 +111,8 @@ pub enum JobKind {
     BootFix,
     /// `emerge --pretend --depclean`, eclean-* --pretend for the Cleanup page.
     CleanupScan { tag: String },
+    /// mount -o remount of a boot partition.
+    Remount,
 }
 
 #[derive(Debug, Clone)]
@@ -232,6 +234,9 @@ pub struct App {
     pub maintenance: views::maintenance::State,
     /// Output of cleanup scans by tag ("depclean", "distfiles", "binpkgs") with time.
     pub cleanup_scans: HashMap<String, (String, Option<i32>, i64)>,
+    boot_mounts_cache: (Instant, Vec<crate::portage::mounts::BootMount>),
+    /// Boot partitions PortageHub made writable that go back to read-only after the emerge.
+    pub remount_restore: Vec<String>,
 }
 
 fn world_cache_path() -> PathBuf {
@@ -330,6 +335,8 @@ impl App {
             kernel_attention: false,
             maintenance: Default::default(),
             cleanup_scans: load_cleanup_cache(),
+            boot_mounts_cache: (Instant::now() - Duration::from_secs(60), Vec::new()),
+            remount_restore: Vec::new(),
         };
         for r in [Reload::Repos, Reload::Vdb, Reload::History, Reload::Config, Reload::MakeConf, Reload::Env] {
             app.spawn_load(r);
@@ -704,7 +711,7 @@ impl App {
                     self.toast(
                         ToastKind::Warn,
                         format!(
-                            "The installed admin helper ({}) is older than PortageHub {mine}. Kernel, boot and cleanup actions need the new one: run sudo dist/install.sh.",
+                            "The installed admin helper ({}) is older than PortageHub {mine}. Newer actions need the matching helper: run sudo dist/install.sh.",
                             version.unwrap_or_else(|| "0.1".into())
                         ),
                     );
@@ -822,6 +829,17 @@ impl App {
                     }),
                     _ => false,
                 };
+                if !self.remount_restore.is_empty() && self.settings.boot_restore_ro {
+                    let targets = std::mem::take(&mut self.remount_restore);
+                    for t in targets {
+                        self.actions.push(Action::RootOp {
+                            title: format!("Make {t} read-only again"),
+                            op: Op::Remount { target: t.clone(), rw: false },
+                            kind: JobKind::Remount,
+                            reload: vec![],
+                        });
+                    }
+                }
                 if touched_kernel && self.settings.boot_check_after_kernel {
                     self.kernel_attention = true;
                     self.toast(ToastKind::Info, "A kernel, bootloader or NVIDIA driver changed — checking the boot setup…");
@@ -873,6 +891,14 @@ impl App {
                 self.spawn_load(Reload::Leftovers);
                 if self.exec.root_ready() {
                     self.actions.push(Action::RootOp { title: "Read boot configuration".into(), op: Op::BootScan, kind: JobKind::BootScan, reload: vec![] });
+                }
+            }
+            JobKind::Remount => {
+                self.invalidate_mounts();
+                if ok {
+                    self.toast(ToastKind::Success, format!("{}: done", job.title));
+                } else {
+                    self.toast(ToastKind::Error, format!("{} failed: {}", job.title, job.error.clone().unwrap_or_else(|| job.output().lines().last().unwrap_or("").to_string())));
                 }
             }
             JobKind::CleanupScan { tag } => {
@@ -986,6 +1012,7 @@ impl App {
                 let title = format!("Preview: {}", opts.command_line());
                 let id = self.start_job(title, argv, env, privilege, JobKind::Pretend { opts: opts.clone() }, vec![]);
                 self.emerge.pretend_job = Some(id);
+                self.emerge.boot_override = false;
                 self.emerge.plan = None;
                 self.emerge.plan_opts = None;
                 self.emerge.options = opts;
@@ -1001,6 +1028,30 @@ impl App {
                 if self.running_emerge().is_some() {
                     self.toast(ToastKind::Warn, "Another emerge is already running. Wait for it to finish.");
                     return;
+                }
+                let touches_boot = planned.iter().any(|(cpv, _, _)| {
+                    crate::portage::atom::split_cpv(cpv).is_some_and(|(c, p, _)| crate::portage::mounts::touches_boot(&format!("{c}/{p}")))
+                });
+                if touches_boot && self.settings.boot_auto_remount {
+                    self.invalidate_mounts();
+                    let blocked: Vec<crate::portage::mounts::BootMount> = self.boot_mounts().into_iter().filter(|m| m.blocks_writes()).collect();
+                    if !blocked.is_empty() {
+                        for m in &blocked {
+                            if m.fstab_ro && !self.remount_restore.contains(&m.target) {
+                                self.remount_restore.push(m.target.clone());
+                            }
+                        }
+                        let ops = blocked.iter().map(|m| Op::Remount { target: m.target.clone(), rw: true }).collect();
+                        self.toast(ToastKind::Info, format!("Making {} writable for the kernel/bootloader update…", blocked.iter().map(|m| m.target.as_str()).collect::<Vec<_>>().join(", ")));
+                        self.apply(Action::Batch {
+                            title: "Prepare boot partitions".into(),
+                            ops,
+                            reload: vec![],
+                            then: Some(Box::new(Action::Emerge(opts, planned))),
+                        });
+                        self.invalidate_mounts();
+                        return;
+                    }
                 }
                 let history = self.data.history.clone().unwrap_or_default();
                 let tracker = Box::new(Tracker::new(&planned, &history));
@@ -1059,10 +1110,7 @@ impl App {
                 self.start_job(title, argv, vec![], Priv::User, kind, vec![]);
             }
             Action::RootOp { title, op, kind, reload } => {
-                let needs_new_helper = matches!(
-                    op,
-                    Op::BootScan | Op::BootAction { .. } | Op::MarkGood { .. } | Op::RemoveKernelLeftovers { .. } | Op::CleanBuildDirs
-                );
+                let needs_new_helper = op.min_helper() > self.exec.helper_version;
                 let id = self.exec.alloc_id();
                 let label = format!("{op:?}").split([' ', '{']).next().unwrap_or("").to_string();
                 self.jobs.push(Job {
@@ -1079,7 +1127,7 @@ impl App {
                     error: None,
                     reload,
                 });
-                if needs_new_helper && self.exec.helper_outdated && !self.exec.is_root && self.exec.helper_state == HelperState::Ready {
+                if needs_new_helper && !self.exec.is_root && self.exec.helper_state == HelperState::Ready {
                     let ji = self.jobs.len() - 1;
                     self.jobs[ji].error = Some("the installed admin helper is too old for this action — run sudo dist/install.sh, then restart PortageHub".into());
                     self.jobs[ji].ended = Some(Instant::now());
@@ -1126,6 +1174,35 @@ impl App {
         self.apply(Action::Batch { title, ops, reload, then });
     }
 
+    /// Boot partitions as currently mounted (refreshed at most every 2 s).
+    pub fn boot_mounts(&mut self) -> Vec<crate::portage::mounts::BootMount> {
+        if self.boot_mounts_cache.0.elapsed() > Duration::from_secs(2) {
+            self.boot_mounts_cache = (Instant::now(), crate::portage::mounts::load());
+        }
+        self.boot_mounts_cache.1.clone()
+    }
+
+    pub fn invalidate_mounts(&mut self) {
+        self.boot_mounts_cache.0 = Instant::now() - Duration::from_secs(60);
+    }
+
+    /// Remount a boot partition through the helper; `restore` marks it to go
+    /// back to read-only after the next emerge.
+    pub fn remount_boot(&mut self, target: &str, rw: bool, restore: bool) {
+        if rw && restore && !self.remount_restore.iter().any(|t| t == target) {
+            self.remount_restore.push(target.to_string());
+        }
+        if !rw {
+            self.remount_restore.retain(|t| t != target);
+        }
+        self.apply(Action::RootOp {
+            title: format!("Make {target} {}", if rw { "writable" } else { "read-only" }),
+            op: Op::Remount { target: target.to_string(), rw },
+            kind: JobKind::Remount,
+            reload: vec![],
+        });
+    }
+
     /// Toast the result of the boot check after a kernel-related change.
     fn report_boot_check(&mut self) {
         self.kernel_attention = false;
@@ -1157,7 +1234,7 @@ impl App {
                 return;
             }
         }
-        if self.exec.helper_outdated && !self.exec.is_root {
+        if (Op::MarkGood { kver: String::new(), state_dir: String::new(), backup: false }).min_helper() > self.exec.helper_version && !self.exec.is_root {
             self.toast(ToastKind::Error, "The installed admin helper is too old for this — run sudo dist/install.sh, then restart PortageHub.");
             return;
         }

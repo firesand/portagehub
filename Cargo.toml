@@ -2,7 +2,7 @@
 description = "PortageHub — a Steam-styled graphical front end for Gentoo Portage"
 license = "GPL-2.0-or-later"
 name = "portagehub"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 
 [dependencies]

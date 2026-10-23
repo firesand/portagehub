@@ -42,6 +42,8 @@ pub struct State {
     pub confirm_dangerous: bool,
     pub env_features: String,
     pub env_makeopts: String,
+    /// Start a kernel emerge even though a boot partition is read-only.
+    pub boot_override: bool,
 }
 
 pub fn show(app: &mut App, ui: &mut Ui) {
@@ -492,7 +494,8 @@ fn review(app: &mut App, ui: &mut Ui) {
             ui.label(w::dim("Waiting for results…"));
             return;
         };
-        summary(app, ui, &plan, &opts);
+        let boot_ok = boot_preflight(app, ui, &plan);
+        summary(app, ui, &plan, &opts, boot_ok);
         problems(app, ui, &plan, &opts);
         plan_table(app, ui, &plan);
         if !plan.depclean.is_empty() {
@@ -536,7 +539,87 @@ fn review(app: &mut App, ui: &mut Ui) {
     });
 }
 
-fn summary(app: &mut App, ui: &mut Ui, plan: &Plan, opts: &EmergeOptions) {
+/// Kernel/bootloader packages write to /boot (and often the EFI partition):
+/// check that those are mounted read-write. Returns whether emerge may start.
+fn boot_preflight(app: &mut App, ui: &mut Ui, plan: &Plan) -> bool {
+    use crate::portage::mounts::touches_boot;
+    let pkgs: Vec<String> = plan
+        .merge_entries()
+        .map(|e| e.key.clone())
+        .chain(plan.depclean.iter().filter_map(|c| crate::portage::atom::split_cpv(c).map(|(a, b, _)| format!("{a}/{b}"))))
+        .filter(|k| touches_boot(k))
+        .fold(Vec::new(), |mut v, k| {
+            if !v.contains(&k) {
+                v.push(k);
+            }
+            v
+        });
+    if pkgs.is_empty() {
+        return true;
+    }
+    let mounts = app.boot_mounts();
+    let blocked: Vec<_> = mounts.iter().filter(|m| m.blocks_writes()).cloned().collect();
+    let pending = app.jobs.iter().any(|j| j.running() && matches!(j.kind, JobKind::Remount));
+    let tint = if blocked.is_empty() { GREEN } else { ORANGE };
+    w::card_tinted(tint).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(icon::HARD_DRIVES).size(22.0).color(tint));
+            ui.vertical(|ui| {
+                ui.label(RichText::new("Before updating the kernel / bootloader").size(15.5).family(theme::bold()).color(WHITE));
+                ui.label(w::dim(format!("{} write to the boot partitions.", pkgs.join(", "))));
+            });
+        });
+        for m in &mounts {
+            ui.horizontal(|ui| {
+                let (ic, col) = if m.blocks_writes() { (icon::LOCK, ORANGE) } else { (icon::LOCK_OPEN, GREEN_TEXT) };
+                ui.label(RichText::new(ic).color(col));
+                ui.label(RichText::new(&m.target).monospace().color(WHITE));
+                ui.label(w::dim(format!("{} {} · {}{}", m.fstype, m.device, m.state_text(), if m.fstab_ro { " (read-only in fstab)" } else { "" })));
+                if m.blocks_writes() && !pending {
+                    let restore = m.fstab_ro && app.settings.boot_restore_ro;
+                    if w::primary(ui, icon::LOCK_OPEN, if m.mounted { "Make writable" } else { "Mount" })
+                        .on_hover_text(format!("mount -o {}{} {}", if m.mounted { "remount," } else { "" }, "rw", m.target))
+                        .clicked()
+                    {
+                        app.remount_boot(&m.target, true, restore);
+                    }
+                } else if app.remount_restore.contains(&m.target) {
+                    ui.label(RichText::new("goes back to read-only after the emerge").size(12.0).color(TEXT_DIM));
+                }
+            });
+        }
+        if pending {
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new().color(ACCENT));
+                ui.label(w::dim("Remounting…"));
+            });
+        }
+        if blocked.is_empty() {
+            ui.label(RichText::new(format!("{} Boot partitions are writable — ready to install.", icon::CHECK_CIRCLE)).color(GREEN_TEXT));
+        } else {
+            ui.label(RichText::new(format!(
+                "{} {} must be writable, or installkernel/grub cannot update it and the new kernel may not be bootable.",
+                icon::WARNING,
+                blocked.iter().map(|m| m.target.as_str()).collect::<Vec<_>>().join(", ")
+            ))
+            .color(ORANGE));
+            ui.checkbox(&mut app.emerge.boot_override, "Start anyway (I'll handle it myself)");
+        }
+        ui.horizontal(|ui| {
+            w::toggle(ui, &mut app.settings.boot_restore_ro);
+            ui.label(w::dim("Make read-only partitions read-only again when the emerge finishes"));
+        });
+        ui.horizontal(|ui| {
+            w::toggle(ui, &mut app.settings.boot_auto_remount);
+            ui.label(w::dim("Always do this automatically for kernel and bootloader updates"));
+        });
+    });
+    ui.add_space(6.0);
+    blocked.is_empty() || app.emerge.boot_override || app.settings.boot_auto_remount
+}
+
+fn summary(app: &mut App, ui: &mut Ui, plan: &Plan, opts: &EmergeOptions, boot_ok: bool) {
     let merges: Vec<_> = plan.merge_entries().collect();
     let count = |l: &str| merges.iter().filter(|e| e.status_label() == l).count();
     let history = app.data.history.clone().unwrap_or_default();
@@ -586,7 +669,7 @@ fn summary(app: &mut App, ui: &mut Ui, plan: &Plan, opts: &EmergeOptions) {
                 let can_run = (ok && (!merges.is_empty() || !plan.depclean.is_empty() || opts.action == EAction::Resume)) || (plan.exit_code == Some(0) && !merges.is_empty());
                 let (label, grad) = if removing { (format!("{}  REMOVE", icon::TRASH), GRAD_RED) } else { (format!("{}  START EMERGE", icon::PLAY), GRAD_GREEN) };
                 let needs_confirm = removing || opts.action.dangerous();
-                let allowed = can_run && (!needs_confirm || app.emerge.confirm_dangerous);
+                let allowed = can_run && (!needs_confirm || app.emerge.confirm_dangerous) && boot_ok;
                 if ui.add_enabled_ui(allowed, |ui| w::big_button(ui, &label, grad, 190.0)).inner.clicked() {
                     let mut planned: Vec<(String, String, bool)> = merges.iter().map(|e| (e.cpv.clone(), e.repo.clone(), e.kind == EntryType::Binary)).collect();
                     // Removals are quick; track them like binary merges.

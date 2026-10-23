@@ -78,13 +78,32 @@ pub enum Op {
     },
     /// Delete leftover build directories below PORTAGE_TMPDIR (refused while emerge runs).
     CleanBuildDirs,
+    /// Mount or remount a boot partition (only /boot, /boot/efi, /efi) read-write or read-only.
+    Remount {
+        target: String,
+        rw: bool,
+    },
 }
 
+/// The only mount points [`Op::Remount`] accepts.
+pub const BOOT_MOUNTPOINTS: &[&str] = &["/boot", "/boot/efi", "/efi"];
+
 impl Op {
-    /// Operations added in protocol 0.2 (older helpers reject them).
-    pub fn needs_v2(&self) -> bool {
-        matches!(self, Op::BootScan | Op::BootAction { .. } | Op::MarkGood { .. } | Op::RemoveKernelLeftovers { .. } | Op::CleanBuildDirs)
+    /// Oldest helper version (major, minor) that understands this operation.
+    pub fn min_helper(&self) -> (u32, u32) {
+        match self {
+            Op::BootScan | Op::BootAction { .. } | Op::MarkGood { .. } | Op::RemoveKernelLeftovers { .. } | Op::CleanBuildDirs => (0, 2),
+            Op::Remount { .. } => (0, 3),
+            _ => (0, 1),
+        }
     }
+}
+
+/// "0.3.0" -> (0, 3); a helper that sends no version is 0.1.
+pub fn parse_version(v: Option<&str>) -> (u32, u32) {
+    let Some(v) = v else { return (0, 1) };
+    let mut it = v.split('.').map(|x| x.parse::<u32>().unwrap_or(0));
+    (it.next().unwrap_or(0), it.next().unwrap_or(0))
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]

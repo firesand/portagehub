@@ -169,3 +169,16 @@ fn kernel_ops_refuse_unsafe_requests() {
     drop(h.stdin);
     let _ = h.child.wait();
 }
+
+#[test]
+fn remount_only_boot_partitions() {
+    let mut h = Helper::start();
+    h.until(|e| matches!(e, Event::Ready { .. }), 10);
+    for (id, target) in [(1u64, "/"), (2, "/etc"), (3, "/boot/../etc"), (4, "/mnt/steam-library")] {
+        h.send(id, Op::Remount { target: target.into(), rw: true });
+        let evs = h.until(|e| matches!(e, Event::Err { id: i, .. } | Event::Started { id: i, .. } if *i == id), 10);
+        assert!(matches!(evs.last(), Some(Event::Err { msg, .. }) if msg.contains("not a boot mount point")), "{target}: {evs:?}");
+    }
+    drop(h.stdin);
+    let _ = h.child.wait();
+}
