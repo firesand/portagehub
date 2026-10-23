@@ -55,7 +55,10 @@ helper.**
   - removing files of uninstalled kernels and leftover build directories.
 
   Every path is resolved with
-  `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_XDEV)`.
+  `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_XDEV)`
+  below a fixed base directory. The base may itself be a symlink, for
+  example `/etc/portage` linked to a git checkout: it is root's choice and is
+  resolved first.
   Neither `..` nor a symlink can lead a write out of its tree, which includes
   the legitimate `make.profile` link. A symlink at the target is replaced,
   never written through. Renames and deletions use the resolved parent

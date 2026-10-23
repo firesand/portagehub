@@ -378,7 +378,10 @@ fn build_dir_entries(root: &Path) -> Vec<(PathBuf, PathBuf, PathBuf)> {
             }
             for p in std::fs::read_dir(c.path()).into_iter().flatten().flatten() {
                 let pf = p.file_name().to_string_lossy().to_string();
-                if pf.contains('-') && p.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                // Portage always creates ${PF}/temp; a package directory of an
+                // old /usr/portage tree (same <cat>/<pkg> shape) has none.
+                let is_build_dir = std::fs::symlink_metadata(p.path().join("temp")).is_ok_and(|m| m.is_dir());
+                if pf.contains('-') && p.file_type().map(|t| t.is_dir()).unwrap_or(false) && is_build_dir {
                     let rel = Path::new(&cat).join(&pf);
                     out.push((logical.join(&rel), base.clone(), rel));
                 }

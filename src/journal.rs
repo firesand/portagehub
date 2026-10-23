@@ -140,7 +140,15 @@ impl Journal {
 
     pub fn begin(&self, label: &str) -> io::Result<String> {
         let _g = self.lock.lock().unwrap();
-        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&self.dir)?;
+        // Parents (/var/lib/portagehub) keep the default mode: the GUI reads
+        // the known-good kernel state there. Only the journal itself is 0700.
+        if let Some(parent) = self.dir.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        match std::fs::DirBuilder::new().mode(0o700).create(&self.dir) {
+            Err(e) if e.kind() != io::ErrorKind::AlreadyExists => return Err(e),
+            _ => {}
+        }
         std::fs::set_permissions(&self.dir, std::fs::Permissions::from_mode(0o700))?;
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
         let mut id = format!("{}-{:09}", now(), nanos);

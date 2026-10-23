@@ -50,6 +50,13 @@ fn es(e: io::Error) -> String {
     e.to_string()
 }
 
+/// Open one of the fixed base directories (/etc, /etc/portage, …). The base
+/// itself may be a symlink (e.g. /etc/portage kept in a git checkout): that
+/// is root's choice, so it is resolved. Everything below it is confined.
+fn open_base(root: &Path, base: &str) -> io::Result<Beneath> {
+    Beneath::open(&std::fs::canonicalize(at(root, base))?)
+}
+
 /// One line for the audit log (never file contents).
 pub fn describe(op: &Op) -> String {
     let mut s = match op {
@@ -234,7 +241,7 @@ impl Server {
             if let Ok(rel) = p.strip_prefix(base)
                 && !rel.as_os_str().is_empty()
             {
-                return Ok((Beneath::open(&at(&self.root, base))?, rel.to_path_buf()));
+                return Ok((open_base(&self.root, base)?, rel.to_path_buf()));
             }
         }
         Err(io::Error::new(io::ErrorKind::PermissionDenied, format!("path not allowed: {logical}")))
@@ -291,7 +298,7 @@ impl Server {
         if !policy::portage_write_allowed(&rel.to_string_lossy()) {
             return Err(format!("path not allowed: {path} (hooks and ._cfg files are left to Portage)"));
         }
-        let base = Beneath::open(&at(&self.root, "/etc/portage")).map_err(|e| format!("/etc/portage: {e}"))?;
+        let base = open_base(&self.root, "/etc/portage").map_err(|e| format!("/etc/portage: {e}"))?;
         Ok((base, rel))
     }
 
@@ -365,7 +372,7 @@ impl Server {
     fn config_update(&self, tx: Option<&str>, path: &str, accept: bool) -> Result<(), String> {
         const E: &str = "/etc";
         let (upd, target) = protocol::config_update_paths(path).ok_or_else(|| format!("not a config update file: {path}"))?;
-        let b = Beneath::open(&at(&self.root, E)).map_err(|e| format!("/etc: {e}"))?;
+        let b = open_base(&self.root, E).map_err(|e| format!("/etc: {e}"))?;
         if !b.exists(&upd).map_err(es)? || b.is_dir(&upd).map_err(es)? {
             return Err(format!("{path} does not exist"));
         }

@@ -22,6 +22,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Libraries eframe may probe for at build time
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libgl-dev pkg-config
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       # Parts that run emerge skip themselves here (no Portage on Ubuntu).

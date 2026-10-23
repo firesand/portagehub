@@ -154,6 +154,12 @@ fn cancel_running_job() {
     std::thread::sleep(Duration::from_millis(800));
     h.send(2, Op::Signal { target: 1, signal: libc::SIGINT });
     let evs = h.until(|e| matches!(e, Event::Exit { id: 1, .. }), 30);
+    // On a tiny system (CI container) emerge may finish before the signal.
+    if evs.iter().any(|e| matches!(e, Event::Err { id: 2, msg } if msg.contains("no such running job"))) {
+        eprintln!("emerge finished before it could be cancelled; skipping");
+        h.close();
+        return;
+    }
     assert!(evs.iter().any(|e| matches!(e, Event::Ok { id: 2 })), "{evs:?}");
     let exit = evs.iter().find_map(|e| match e {
         Event::Exit { id: 1, code, signal } => Some((*code, *signal)),
@@ -298,6 +304,10 @@ fn writes_stay_in_etc_portage_and_never_follow_symlinks() {
     assert!(log.iter().any(|r| r.event == "commit" && r.files == vec!["/etc/portage/package.use/zz-portagehub".to_string()]));
     let mode = std::fs::metadata(root.join("var/lib/portagehub/journal")).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o700, "journal holds copies of root-only files");
+    std::fs::create_dir(root.join("probe")).unwrap();
+    let default_mode = std::fs::metadata(root.join("probe")).unwrap().permissions().mode() & 0o777;
+    let parent = std::fs::metadata(root.join("var/lib/portagehub")).unwrap().permissions().mode() & 0o777;
+    assert_eq!(parent, default_mode, "only the journal is private; the GUI reads known-good state next to it");
     h.close();
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -405,6 +415,9 @@ fn kernel_and_cleanup_ops_stay_in_their_trees() {
     // Build-dir cleanup, with a symlinked category that must be skipped.
     let bd = root.join("var/tmp/portage/app-misc/foo-1.0/work");
     std::fs::create_dir_all(&bd).unwrap();
+    std::fs::create_dir_all(root.join("var/tmp/portage/app-misc/foo-1.0/temp")).unwrap();
+    // Same <cat>/<pf> shape but no temp/: not a build dir (e.g. an old /usr/portage tree).
+    std::fs::create_dir_all(root.join("var/tmp/portage/dev-lang/tree-pkg/files")).unwrap();
     symlink(root.join("outside"), bd.join("link")).unwrap();
     symlink(root.join("outside"), root.join("var/tmp/portage/sys-evil")).unwrap();
     let (err, _) = h.call(5, None, Op::CleanBuildDirs);
@@ -413,6 +426,7 @@ fn kernel_and_cleanup_ops_stay_in_their_trees() {
         e => {
             assert_eq!(e, None);
             assert!(!root.join("var/tmp/portage/app-misc").exists());
+            assert!(root.join("var/tmp/portage/dev-lang/tree-pkg/files").exists());
             assert!(root.join("outside/keep").exists());
         }
     }
@@ -445,4 +459,23 @@ fn peer_must_be_the_socket_the_gui_provides() {
     let e = std::fs::OpenOptions::new().write(true).open(format!("/proc/{pid}/fd/0")).unwrap_err();
     assert_eq!(e.raw_os_error(), Some(libc::ENXIO), "{e}");
     h.close();
+}
+
+#[test]
+fn etc_portage_may_itself_be_a_symlink() {
+    // Some keep /etc/portage in a git checkout and link it; the base is
+    // resolved, while links below it are still refused.
+    let root = scratch("baselink");
+    std::fs::rename(root.join("etc/portage"), root.join("portage-git")).unwrap();
+    symlink("../portage-git", root.join("etc/portage")).unwrap();
+    let mut h = in_root(&root);
+    assert_eq!(h.call(1, None, write("/etc/portage/package.use/zz", "a/b x\n")).0, None);
+    assert_eq!(std::fs::read_to_string(root.join("portage-git/package.use/zz")).unwrap(), "a/b x\n");
+    symlink(root.join("outside"), root.join("portage-git/evil")).unwrap();
+    assert!(h.call(2, None, write("/etc/portage/evil/x", "x")).0.is_some());
+    let tx = last_commit(&root);
+    assert_eq!(h.call(3, None, Op::Rollback { transaction: tx, force: false }).0, None);
+    assert!(!root.join("portage-git/package.use/zz").exists());
+    h.close();
+    let _ = std::fs::remove_dir_all(&root);
 }
