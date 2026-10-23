@@ -152,7 +152,8 @@ impl Tracker {
         self.items.last_mut().unwrap()
     }
 
-    pub fn feed(&mut self, line: &str, history: &History) {
+    /// `at`: when the line was produced (not when it is processed).
+    pub fn feed(&mut self, line: &str, history: &History, at: Instant) {
         static EMERGING: OnceLock<Regex> = OnceLock::new();
         static INSTALLING: OnceLock<Regex> = OnceLock::new();
         static COMPLETED: OnceLock<Regex> = OnceLock::new();
@@ -173,7 +174,7 @@ impl Tracker {
         let msgs = rx(&MSGS, r"\* Messages for package (\S+?)(?:::\S+)?:");
         static UNMERGING: OnceLock<Regex> = OnceLock::new();
         let unmerging = rx(&UNMERGING, r">>> Unmerging(?: in)? \((\d+) of (\d+)\) (\S+?)(?:\.\.\.)?\s*$");
-        let now = Instant::now();
+        let now = at;
         let t = line.trim();
 
         if let Some(c) = unmerging.captures(t) {
@@ -370,13 +371,13 @@ mod tests {
             &[("app-misc/a-1".into(), "gentoo".into(), false), ("app-misc/b-2".into(), "gentoo".into(), false)],
             &h,
         );
-        t.feed(">>> Emerging (1 of 2) app-misc/a-1::gentoo", &h);
-        t.feed(">>> Emerging (2 of 2) app-misc/b-2::gentoo", &h);
+        t.feed(">>> Emerging (1 of 2) app-misc/a-1::gentoo", &h, Instant::now());
+        t.feed(">>> Emerging (2 of 2) app-misc/b-2::gentoo", &h, Instant::now());
         assert_eq!(t.counts().2, 2);
-        t.feed(">>> Installing (1 of 2) app-misc/a-1::gentoo", &h);
+        t.feed(">>> Installing (1 of 2) app-misc/a-1::gentoo", &h, Instant::now());
         assert_eq!(t.items[0].stage, Stage::Installing);
-        t.feed(">>> Completed (1 of 2) app-misc/a-1::gentoo", &h);
-        t.feed(" * ERROR: app-misc/b-2::gentoo failed (compile phase):", &h);
+        t.feed(">>> Completed (1 of 2) app-misc/a-1::gentoo", &h, Instant::now());
+        t.feed(" * ERROR: app-misc/b-2::gentoo failed (compile phase):", &h, Instant::now());
         assert_eq!(t.items[0].stage, Stage::Done);
         assert_eq!(t.items[1].stage, Stage::Failed);
         assert_eq!(t.items[1].phase, "failed in compile");
@@ -387,9 +388,9 @@ mod tests {
     fn unmerge_progress() {
         let h = History::default();
         let mut t = Tracker::new(&[("a/b-1".into(), String::new(), true), ("c/d-2".into(), String::new(), true)], &h);
-        t.feed(">>> Unmerging (1 of 2) a/b-1...", &h);
+        t.feed(">>> Unmerging (1 of 2) a/b-1...", &h, Instant::now());
         assert_eq!(t.items[0].stage, Stage::Installing);
-        t.feed(">>> Unmerging (2 of 2) c/d-2...", &h);
+        t.feed(">>> Unmerging (2 of 2) c/d-2...", &h, Instant::now());
         assert_eq!(t.items[0].stage, Stage::Done);
         assert_eq!(t.items[1].stage, Stage::Installing);
         t.finish(true);

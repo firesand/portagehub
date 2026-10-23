@@ -5,6 +5,17 @@ Everything you would do with `emerge`, `eselect repository` and the files in
 `/etc/portage` is available as buttons, switches and menus — with plain-language
 explanations for newcomers and every expert option still within reach.
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Store home with the @world update list](docs/screenshots/store.png) | ![Package page: USE flags with Default/On/Off switches](docs/screenshots/package-use-flags.png) |
+| **Store** — your system at a glance; updates checked against `emerge -uDN @world` | **Package page** — USE flags as switches, with descriptions and scope |
+| ![Every emerge option as a switch](docs/screenshots/emerge-options.png) | ![Preview with conflict handling](docs/screenshots/preview-conflicts.png) |
+| **All options** — every emerge flag as a switch, radio or number field | **Preview & conflicts** — problems turned into one-click fixes |
+| ![Live emerge progress](docs/screenshots/emerge-progress.png) | ![Kernels and boot checks](docs/screenshots/kernels-boot.png) |
+| **Activity** — per-package stages, elapsed and remaining time, live log | **Kernels & Boot** — known-good kernels, boot partitions, boot check |
+
 ## Features
 
 - **Store** — browse all packages from every repository, category tiles, fast search

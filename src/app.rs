@@ -726,11 +726,11 @@ impl App {
                     self.toast(ToastKind::Warn, format!("Administrator session ended: {reason}"));
                 }
             }
-            ExecMsg::Event(ev) => self.handle_event(ev),
+            ExecMsg::Event(ev, at) => self.handle_event(ev, at),
         }
     }
 
-    fn handle_event(&mut self, ev: Event) {
+    fn handle_event(&mut self, ev: Event, at: Instant) {
         let Some(id) = ev.id() else { return };
         // Batches first.
         if let Some(bi) = self.batches.iter().position(|b| b.current == Some(id)) {
@@ -757,12 +757,12 @@ impl App {
             Event::Ok { .. } => {
                 // Helper operations (not programs) finish with Ok.
                 job.exit = Some(Some(0));
-                job.ended = Some(Instant::now());
+                job.ended = Some(at);
                 self.finish_job(ji);
             }
             Event::Line { stream, text, .. } => {
                 if let JobKind::Emerge { tracker, .. } = &mut job.kind {
-                    tracker.feed(&text, &history);
+                    tracker.feed(&text, &history, at);
                 }
                 job.partial = None;
                 job.lines.push((stream == portagehub::protocol::StreamKind::Stderr, text));
@@ -772,18 +772,18 @@ impl App {
             }
             Event::Partial { text, .. } => {
                 if let JobKind::Emerge { tracker, .. } = &mut job.kind {
-                    tracker.feed(&text, &history);
+                    tracker.feed(&text, &history, at);
                 }
                 job.partial = Some(text);
             }
             Event::Err { msg, .. } => {
                 job.error = Some(msg);
-                job.ended = Some(Instant::now());
+                job.ended = Some(at);
                 self.finish_job(ji);
             }
             Event::Exit { code, .. } => {
                 job.exit = Some(code);
-                job.ended = Some(Instant::now());
+                job.ended = Some(at);
                 self.finish_job(ji);
             }
         }

@@ -29,7 +29,9 @@ pub enum HelperState {
 /// Messages from executor threads to the app.
 #[derive(Debug)]
 pub enum ExecMsg {
-    Event(Event),
+    /// An event and when it arrived (output is timestamped on arrival, so
+    /// progress stays accurate even when the window is hidden and not repainting).
+    Event(Event, std::time::Instant),
     HelperReady(Option<String>),
     HelperGone(String),
 }
@@ -57,6 +59,10 @@ pub struct Executor {
     pub helper_outdated: bool,
     /// (major, minor) of the running helper.
     pub helper_version: (u32, u32),
+}
+
+fn ev_msg(e: Event) -> ExecMsg {
+    ExecMsg::Event(e, std::time::Instant::now())
 }
 
 pub fn find_helper() -> Option<PathBuf> {
@@ -99,7 +105,7 @@ impl Executor {
         let tx = Mutex::new(self.tx.clone());
         let ctx = self.ctx.clone();
         Arc::new(move |ev| {
-            let _ = tx.lock().unwrap().send(ExecMsg::Event(ev));
+            let _ = tx.lock().unwrap().send(ev_msg(ev));
             ctx.request_repaint();
         })
     }
@@ -132,7 +138,7 @@ impl Executor {
                         self.user_pids.lock().unwrap().insert(id, pid);
                     }
                     Err(e) => {
-                        let _ = self.tx.send(ExecMsg::Event(Event::Err { id, msg: format!("{}: {e}", argv[0]) }));
+                        let _ = self.tx.send(ev_msg(Event::Err { id, msg: format!("{}: {e}", argv[0]) }));
                     }
                 }
             }
@@ -185,7 +191,7 @@ impl Executor {
     fn send_to_helper(&mut self, req: Request) {
         let id = req.id;
         if req.op.min_helper() > self.helper_version {
-            let _ = self.tx.send(ExecMsg::Event(Event::Err {
+            let _ = self.tx.send(ev_msg(Event::Err {
                 id,
                 msg: "the installed admin helper is too old for this action — run sudo dist/install.sh, then restart PortageHub".into(),
             }));
@@ -199,7 +205,7 @@ impl Executor {
         if ok {
             self.pending_root.lock().unwrap().insert(id);
         } else {
-            let _ = self.tx.send(ExecMsg::Event(Event::Err { id, msg: "root helper is not running".into() }));
+            let _ = self.tx.send(ev_msg(Event::Err { id, msg: "root helper is not running".into() }));
             self.helper_state = HelperState::Failed("helper pipe closed".into());
         }
     }
@@ -262,7 +268,7 @@ impl Executor {
                         {
                             pending.lock().unwrap().remove(&id);
                         }
-                        let _ = tx.send(ExecMsg::Event(ev));
+                        let _ = tx.send(ev_msg(ev));
                     }
                     Err(_) => {}
                 }
@@ -272,7 +278,7 @@ impl Executor {
             std::thread::sleep(std::time::Duration::from_millis(100));
             let ids: Vec<u64> = pending.lock().unwrap().drain().collect();
             for id in ids {
-                let _ = tx.send(ExecMsg::Event(Event::Err { id, msg: "root helper exited".into() }));
+                let _ = tx.send(ev_msg(Event::Err { id, msg: "root helper exited".into() }));
             }
             let reason = err_text.lock().unwrap().trim().to_string();
             let _ = tx.send(ExecMsg::HelperGone(if reason.is_empty() { "authentication cancelled or helper exited".into() } else { reason }));
@@ -284,7 +290,7 @@ impl Executor {
     fn fail_queued(&mut self, msg: String) {
         self.helper_state = HelperState::Failed(msg.clone());
         while let Some(r) = self.queued.pop_front() {
-            let _ = self.tx.send(ExecMsg::Event(Event::Err { id: r.id, msg: msg.clone() }));
+            let _ = self.tx.send(ev_msg(Event::Err { id: r.id, msg: msg.clone() }));
         }
         self.ctx.request_repaint();
     }
