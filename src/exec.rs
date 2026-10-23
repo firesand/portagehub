@@ -163,10 +163,6 @@ impl Executor {
         id
     }
 
-    pub fn root_op(&mut self, op: Op) -> u64 {
-        self.root_op_tx(op, None)
-    }
-
     /// A root operation that belongs to transaction `tx` (from `Op::Begin`).
     pub fn root_op_tx(&mut self, op: Op, tx: Option<String>) -> u64 {
         let id = self.alloc_id();

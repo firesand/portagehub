@@ -41,6 +41,9 @@ pub struct Wizard {
     pub file: String,
 }
 
+/// `._cfg` updates found by the background scan: (update file, target).
+type UpdateSlot = Arc<Mutex<Option<Vec<(PathBuf, PathBuf)>>>>;
+
 #[derive(Default)]
 pub struct State {
     pub page: Page,
@@ -56,7 +59,7 @@ pub struct State {
     pub env_edit: Option<(PathBuf, String)>,
     pub env_new: String,
     pub profile_pick: Option<usize>,
-    updates: Option<Arc<Mutex<Option<Vec<(PathBuf, PathBuf)>>>>>,
+    updates: Option<UpdateSlot>,
     pub stray_names: std::collections::HashMap<PathBuf, String>,
 }
 
@@ -493,10 +496,8 @@ fn wizard(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
                 let q = wz.query.trim().to_lowercase();
                 if !q.is_empty() && wz.key.as_deref() != Some(q.as_str()) {
                     ui.horizontal_wrapped(|ui| {
-                        if q.contains('*') || q.contains('/') {
-                            if ui.small_button(format!("use “{q}”")).clicked() {
-                                wz.key = Some(q.clone());
-                            }
+                        if (q.contains('*') || q.contains('/')) && ui.small_button(format!("use “{q}”")).clicked() {
+                            wz.key = Some(q.clone());
                         }
                         if let Some(c) = &catalog {
                             let mut n = 0;
@@ -708,7 +709,7 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
             ui,
             "The global build settings. The cards below edit the most common variables; every other variable is listed further down. Effective values include what your profile adds.",
         );
-        let mut set = |app: &mut App, name: &str, value: String| {
+        let set = |app: &mut App, name: &str, value: String| {
             let new = makeconf::set_var(&text, name, &value);
             app.push(Action::Write {
                 title: format!("Set {name} in make.conf"),
@@ -1106,7 +1107,7 @@ fn env_files(app: &mut App, ui: &mut Ui) {
         ui.horizontal_wrapped(|ui| {
             for (name, desc, content) in ENV_TEMPLATES {
                 let exists = cfg.env_files.iter().any(|e| e.name == *name);
-                if ui.add_enabled(!exists, egui::Button::new(format!("{name}"))).on_hover_text(format!("{desc}\n\n{content}")).clicked() {
+                if ui.add_enabled(!exists, egui::Button::new(name.to_string())).on_hover_text(format!("{desc}\n\n{content}")).clicked() {
                     app.push(Action::Write {
                         title: format!("Create env/{name}"),
                         changes: vec![FileChange {
@@ -1249,7 +1250,7 @@ fn news(app: &mut App, ui: &mut Ui) {
 fn updates(app: &mut App, ui: &mut Ui) {
     let protect = app.data.env.as_ref().map(|e| e.get("CONFIG_PROTECT").to_string()).unwrap_or_default();
     if app.config_view.updates.is_none() {
-        let slot: Arc<Mutex<Option<Vec<(PathBuf, PathBuf)>>>> = Arc::default();
+        let slot: UpdateSlot = Arc::default();
         let s2 = slot.clone();
         let ctx = ui.ctx().clone();
         std::thread::spawn(move || {

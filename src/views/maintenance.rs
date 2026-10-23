@@ -2,10 +2,9 @@
 //! modules) and cleanup of everything that is no longer used.
 
 use super::common::{self, page, subnav};
-use crate::app::{Action, App, JobKind, Tab, ToastKind};
+use crate::app::{Action, App, JobKind, ToastKind};
 use crate::data::Reload;
 use crate::edits;
-use crate::exec::Priv;
 use crate::portage::cleanup;
 use crate::portage::emerge::{self, EmergeOptions, Value};
 use crate::portage::kernel::{Fix, KernelState, NvStatus, Severity};
@@ -34,7 +33,6 @@ pub struct State {
     pub depclean_skip: HashSet<String>,
     /// Selected obsolete /etc/portage lines.
     pub config_selected: HashSet<(PathBuf, usize)>,
-    pub show_rules: bool,
 }
 
 pub fn show(app: &mut App, ui: &mut Ui) {
@@ -365,7 +363,8 @@ fn kernels(app: &mut App, ui: &mut Ui) {
                     Some(NvStatus::Ok) => {
                         ui.label(
                             RichText::new(format!("{} {}", icon::CHECK, k.nvidia.as_ref().map(|n| n.version.clone()).unwrap_or_default())).color(GREEN_TEXT),
-                        );
+                        )
+                        .on_hover_text(k.nvidia.as_ref().map(|n| n.path.display().to_string()).unwrap_or_default());
                     }
                     Some(NvStatus::Missing) => {
                         ui.label(RichText::new(format!("{} missing", icon::X)).color(RED));

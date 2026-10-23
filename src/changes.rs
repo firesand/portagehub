@@ -126,7 +126,8 @@ pub fn summarize(records: &[Record]) -> ChangeLog {
 }
 
 pub fn load() -> ChangeLog {
-    match portagehub::audit::read(&portagehub::audit::path_for(std::path::Path::new("/"))) {
+    // Same root as the helper (PORTAGEHUB_ROOT for tests, never as root).
+    match portagehub::audit::read(&portagehub::audit::path_for(&portagehub::server::system_root())) {
         Some(records) => summarize(&records),
         None => ChangeLog::default(),
     }

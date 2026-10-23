@@ -43,6 +43,9 @@ pub enum UseScope {
 
 type Shared<T> = Arc<Mutex<Option<T>>>;
 
+/// Reverse dependencies being computed in the background: (key, depender).
+type Rdeps = Shared<Vec<(String, String)>>;
+
 #[derive(Default)]
 pub struct State {
     pub key: Option<String>,
@@ -56,7 +59,7 @@ pub struct State {
     pub deps_active: bool,
     pub files_filter: String,
     files: Option<(String, Arc<Vec<ContentEntry>>)>,
-    rdeps: Option<(String, Shared<Vec<(String, String)>>)>,
+    rdeps: Option<(String, Rdeps)>,
     pub quick_kind: Option<ConfKind>,
     pub quick_value: String,
     pub quick_atom: String,
@@ -637,7 +640,7 @@ fn version_menu(app: &mut App, ui: &mut Ui, d: &PkgDetail, v: &VersionInfo) {
     let Some(cfg) = app.data.config.clone() else { return };
     ui.separator();
     ui.label(w::dim("Keywords (package.accept_keywords)"));
-    let mut add = |app: &mut App, kind: ConfKind, line: String, title: String| {
+    let add = |app: &mut App, kind: ConfKind, line: String, title: String| {
         let ch = edits::add_lines(&cfg, &[(kind, line)], &target, None);
         app.push(Action::Write { title, changes: ch, reload: vec![Reload::Config], then: None });
     };
@@ -792,7 +795,7 @@ fn use_flags(app: &mut App, ui: &mut Ui, d: &PkgDetail, installed: &[vdb::Instal
         UseScope::Version => format!("={}", v.cpv(&d.key)),
     };
     let required_use = v.meta.get("REQUIRED_USE").to_string();
-    let mut ordered: Vec<(&String, &Vec<(String, Option<bool>)>)> = groups.iter().collect();
+    let mut ordered: Vec<_> = groups.iter().collect();
     ordered.sort_by_key(|(g, _)| (g.as_str() != "Features", g.to_string()));
     for (g, flags) in ordered {
         let shown: Vec<_> = flags.iter().filter(|(f, _)| filter.is_empty() || f.contains(&filter)).collect();

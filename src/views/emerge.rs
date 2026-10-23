@@ -37,8 +37,6 @@ pub struct State {
     pub target_input: String,
     pub log_filter: String,
     pub log_errors_only: bool,
-    pub follow: bool,
-    pub show_raw: bool,
     pub confirm_dangerous: bool,
     pub env_features: String,
     pub env_makeopts: String,
@@ -1143,11 +1141,14 @@ fn plan_table(app: &mut App, ui: &mut Ui, plan: &Plan) {
             ui.horizontal(|ui| {
                 ui.add_space(e.depth as f32 * 4.0);
                 let r = ui.add(egui::Label::new(RichText::new(&e.key).color(WHITE)).sense(egui::Sense::click()));
-                if r.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() && !e.key.is_empty() {
+                if r.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(w::mono(&e.raw)).clicked() && !e.key.is_empty() {
                     app.push(Action::Open(e.key.clone()));
                 }
                 if !e.repo.is_empty() {
                     ui.label(w::dim(format!("::{}", e.repo)));
+                }
+                if !e.size.is_empty() {
+                    ui.label(w::dim(&e.size)).on_hover_text("Download size");
                 }
             });
             let change = if e.old.is_empty() { e.version.clone() } else { format!("{} → {}", e.old.join(", ").split("::").next().unwrap_or(""), e.version) };
@@ -1326,7 +1327,10 @@ fn tracker_view(_app: &mut App, ui: &mut Ui, t: &crate::portage::progress::Track
                     Stage::Skipped => "BLOCKED",
                 };
                 w::status_badge(ui, label).on_hover_text(it.stage.label());
-                ui.label(RichText::new(&it.cpv).color(if it.stage.active() { WHITE } else { TEXT }));
+                let cpv = ui.label(RichText::new(&it.cpv).color(if it.stage.active() { WHITE } else { TEXT }));
+                if !it.repo.is_empty() {
+                    cpv.on_hover_text(format!("from ::{}", it.repo));
+                }
                 let ph = if it.stage.active() && !it.phase.is_empty() { it.phase.clone() } else { it.stage.label().to_lowercase() };
                 ui.label(w::dim(ph));
                 let el = it.elapsed(now);

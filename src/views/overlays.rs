@@ -252,17 +252,18 @@ fn repo_card(app: &mut App, ui: &mut Ui, r: &Repo, ebuilds: Option<usize>) {
                     }
                 });
             }
-            if save && let Some((name, keys)) = app.overlays.editing.take() {
-                if let Some(file) = r.user_file() {
-                    let old = std::fs::read_to_string(file).unwrap_or_default();
-                    let new = repos::replace_section(&old, &name, Some(&repos::render_section(&name, &keys)));
-                    app.push(Action::Write {
-                        title: format!("Update repository {name}"),
-                        changes: vec![FileChange { path: file.to_path_buf(), old, new: Some(new) }],
-                        reload: vec![Reload::Repos],
-                        then: None,
-                    });
-                }
+            if save
+                && let Some((name, keys)) = app.overlays.editing.take()
+                && let Some(file) = r.user_file()
+            {
+                let old = std::fs::read_to_string(file).unwrap_or_default();
+                let new = repos::replace_section(&old, &name, Some(&repos::render_section(&name, &keys)));
+                app.push(Action::Write {
+                    title: format!("Update repository {name}"),
+                    changes: vec![FileChange { path: file.to_path_buf(), old, new: Some(new) }],
+                    reload: vec![Reload::Repos],
+                    then: None,
+                });
             }
             if cancel {
                 app.overlays.editing = None;

@@ -23,6 +23,7 @@ pub enum Step {
     Apply,
     CheckWorld,
     MPage(String),
+    HPage(String),
     BootScan,
     CleanScan(String),
     Wait(f32),
@@ -67,6 +68,7 @@ impl Script {
                 "apply" => Step::Apply,
                 "checkworld" => Step::CheckWorld,
                 "mpage" => Step::MPage(v.to_string()),
+                "hpage" => Step::HPage(v.to_string()),
                 "bootscan" => Step::BootScan,
                 "cleanscan" => Step::CleanScan(v.to_string()),
                 "wait" => Step::Wait(v.parse().unwrap_or(1.0)),
@@ -193,6 +195,17 @@ pub fn run(app: &mut App, ctx: &egui::Context, script: &mut Script) {
                 });
             }
             Step::CheckWorld => app.push(Action::CheckWorld),
+            Step::HPage(p) => {
+                use crate::views::history::Show;
+                app.tab = Tab::History;
+                app.history_view.show = match p.as_str() {
+                    "changes" => Show::Changes,
+                    "failed" => Show::Failed,
+                    "removals" => Show::Unmerges,
+                    "commands" => Show::Sessions,
+                    _ => Show::All,
+                };
+            }
             Step::MPage(p) => {
                 app.tab = Tab::Maintenance;
                 app.maintenance.page = if p == "cleanup" { crate::views::maintenance::Page::Cleanup } else { crate::views::maintenance::Page::Kernels };

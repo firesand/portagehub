@@ -74,10 +74,8 @@ pub struct BootInfo {
 #[derive(Debug, Clone, Default)]
 pub struct NvidiaInfo {
     pub gpu: bool,
-    pub gpu_name: String,
     /// Installed x11-drivers/nvidia-drivers version (without revision).
     pub drivers: Option<String>,
-    pub drivers_cpv: Option<String>,
     pub dist_kernel: bool,
     pub fallback_script: Option<PathBuf>,
 }
@@ -190,16 +188,15 @@ pub fn default_state_dir() -> PathBuf {
     if Path::new("/var/lib/kernel-fallback").is_dir() { PathBuf::from("/var/lib/kernel-fallback") } else { PathBuf::from("/var/lib/portagehub/kernels") }
 }
 
-fn detect_gpu() -> (bool, String) {
+fn detect_gpu() -> bool {
     for e in std::fs::read_dir("/sys/bus/pci/devices").into_iter().flatten().flatten() {
         let vendor = read_trim(&e.path().join("vendor"));
         let class = read_trim(&e.path().join("class"));
         if vendor == "0x10de" && class.starts_with("0x03") {
-            let dev = read_trim(&e.path().join("device"));
-            return (true, format!("NVIDIA GPU (device {dev})"));
+            return true;
         }
     }
-    (false, String::new())
+    false
 }
 
 fn detect_boot(vdb: &Vdb) -> BootInfo {
@@ -380,13 +377,11 @@ pub fn load(vdb: &Vdb, keep_set: &str) -> KernelState {
         }
     }
     // NVIDIA
-    let (gpu, gpu_name) = detect_gpu();
+    let gpu = detect_gpu();
     let nv_pkg = vdb.installed("x11-drivers/nvidia-drivers").last().cloned();
     st.nvidia = NvidiaInfo {
         gpu,
-        gpu_name,
         drivers: nv_pkg.as_ref().map(|p| p.ver.without_revision().to_string()),
-        drivers_cpv: nv_pkg.as_ref().map(|p| p.cpv()),
         dist_kernel: nv_pkg.as_ref().is_some_and(|p| p.read("USE").split_whitespace().any(|u| u == "dist-kernel")),
         fallback_script: ["/usr/local/sbin/kernel-fallback-nvidia", "/usr/local/bin/kernel-fallback-nvidia"].iter().map(PathBuf::from).find(|p| p.is_file()),
     };

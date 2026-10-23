@@ -192,7 +192,7 @@ fn changes(app: &mut App, ui: &mut Ui) {
                             ChangeState::Incomplete => ("INCOMPLETE", YELLOW),
                         };
                         w::badge(ui, label, fg, fg.gamma_multiply(0.18));
-                        ui.label(RichText::new(&c.label).color(WHITE));
+                        ui.label(RichText::new(&c.label).color(WHITE)).on_hover_text(format!("Requested by uid {} · transaction {}", c.uid, c.tx));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if c.can_undo() {
                                 let r = ui.add_enabled_ui(can_undo, |ui| w::button(ui, icon::ARROW_COUNTER_CLOCKWISE, "Undo")).inner;
@@ -224,7 +224,11 @@ fn changes(app: &mut App, ui: &mut Ui) {
                         Some(false) => w::status_badge(ui, "FAILED"),
                         None => w::status_badge(ui, "NO RESULT"),
                     };
-                    ui.label(w::mono(&c.what)).on_hover_text(&c.detail);
+                    ui.label(w::mono(&c.what)).on_hover_text(format!(
+                        "Requested by uid {}{}",
+                        c.uid,
+                        if c.detail.is_empty() { String::new() } else { format!(" · {}", c.detail) }
+                    ));
                 });
             }
         });

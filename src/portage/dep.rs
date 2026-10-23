@@ -4,6 +4,9 @@
 use super::atom::Atom;
 use std::collections::HashSet;
 
+// Leaves (with their parsed atom) are the common case; boxing them would cost
+// an allocation per token.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum DepNode {
     /// A leaf token; `atom` is filled in when the token parses as an atom.

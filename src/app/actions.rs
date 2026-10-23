@@ -103,7 +103,7 @@ impl App {
                 let mut env = opts.env.clone();
                 env.retain(|(_, v)| !v.is_empty());
                 let title = format!("emerge {}", opts.args().join(" "));
-                let kind = if opts.action == crate::portage::emerge::Action::Sync { JobKind::Sync } else { JobKind::Emerge { opts: opts.clone(), tracker } };
+                let kind = if opts.action == crate::portage::emerge::Action::Sync { JobKind::Sync } else { JobKind::Emerge { tracker } };
                 let id = self.start_job(title, argv, env, Priv::Root, kind, vec![]);
                 self.emerge.active_job = Some(id);
                 self.emerge.page = views::emerge::Page::Activity;
@@ -114,8 +114,8 @@ impl App {
                 self.emerge.selected_job = Some(id);
             }
             Action::Capture { tag, argv, privilege } => {
-                let id = self.start_job(format!("{}", argv.join(" ")), argv, vec![], privilege, JobKind::Capture { tag: tag.clone() }, vec![]);
-                self.captures.insert(tag, Captured { job: id, ..Default::default() });
+                self.start_job(argv.join(" "), argv, vec![], privilege, JobKind::Capture { tag: tag.clone() }, vec![]);
+                self.captures.insert(tag, Captured::default());
             }
             Action::Batch { title, ops, reload, then } => {
                 if !ops.is_empty() {
@@ -134,7 +134,6 @@ impl App {
                 }
             }
             Action::Reload(r) => self.spawn_load(r),
-            Action::Toast(k, t) => self.toast(k, t),
             Action::Cancel(id) => {
                 if let Some(j) = self.jobs.iter().find(|j| j.id == id) {
                     let p = j.privilege;

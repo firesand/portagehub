@@ -229,7 +229,6 @@ mod tests {
             ignored: false,
             lines: raw.lines().map(parse_line).collect(),
             raw: raw.into(),
-            writable_by_user: false,
         };
         PortageConfig {
             sets: vec![ConfSet { kind: ConfKind::Use, base: "/etc/portage/package.use".into(), exists: true, is_dir: true, files: vec![f] }],
@@ -255,6 +254,6 @@ mod tests {
         let ch = set_use_flags(&cfg, "app-misc/new", &[("x".into(), Tri::On)], "zz-portagehub");
         assert_eq!(ch[0].path, PathBuf::from("/etc/portage/package.use/zz-portagehub"));
         let st = user_use_state(&cfg, "app-misc", "foo");
-        assert_eq!(st["baz"].0, false);
+        assert!(!st["baz"].0);
     }
 }

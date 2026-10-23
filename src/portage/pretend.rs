@@ -38,10 +38,6 @@ impl PlanEntry {
         self.flags.contains(c)
     }
 
-    pub fn is_new(&self) -> bool {
-        self.has('N')
-    }
-
     pub fn status_label(&self) -> &'static str {
         if self.kind == EntryType::Blocks {
             return if self.has('B') { "BLOCKED" } else { "BLOCKER" };
@@ -232,10 +228,6 @@ pub struct Plan {
 impl Plan {
     pub fn merge_entries(&self) -> impl Iterator<Item = &PlanEntry> {
         self.entries.iter().filter(|e| matches!(e.kind, EntryType::Ebuild | EntryType::Binary))
-    }
-
-    pub fn ok(&self) -> bool {
-        self.exit_code == Some(0) && self.suggestions.is_empty() && !self.problems.iter().any(|p| p.is_blocking())
     }
 }
 
@@ -472,7 +464,9 @@ pub fn parse(output: &str, exit_code: Option<i32>) -> Plan {
             static SKREQ: OnceLock<Regex> = OnceLock::new();
             let skreq = re(&SKREQ, r"^\s+(\S+) required by (.+?)\s*$");
             i += 1;
-            let mut current: Option<(String, String, Vec<(String, String)>)> = None;
+            // (package, slot, [(requirement, required by)])
+            type Skipped = (String, String, Vec<(String, String)>);
+            let mut current: Option<Skipped> = None;
             while i < lines.len() {
                 let l = lines[i];
                 let lt = l.trim();
@@ -559,11 +553,9 @@ pub fn parse(output: &str, exit_code: Option<i32>) -> Plan {
                     let mut parts = r.splitn(2, ' ');
                     pkg = parts.next().unwrap_or("").to_string();
                     use_line = parts.next().unwrap_or("").to_string();
-                } else if l.starts_with("The following REQUIRED_USE flag constraints are unsatisfied") {
-                } else if l.starts_with("The above constraints are a subset") {
-                } else if l.is_empty() && !constraint.is_empty() {
-                    break;
-                } else if l.starts_with("(dependency required by") || l.starts_with("!!!") {
+                } else if l.starts_with("The following REQUIRED_USE flag constraints are unsatisfied") || l.starts_with("The above constraints are a subset") {
+                    // Headings between the package line and the constraints.
+                } else if (l.is_empty() && !constraint.is_empty()) || l.starts_with("(dependency required by") || l.starts_with("!!!") {
                     break;
                 } else if !l.is_empty() && !pkg.is_empty() {
                     constraint.push(l.to_string());
@@ -714,7 +706,7 @@ The following USE changes are necessary to proceed:
         assert_eq!(p.suggestions[1].line, ">=media-libs/baz-1.2 qt6 -qt5");
         assert!(p.problems.iter().any(|x| matches!(x, Problem::News { count: 2 })));
         assert!(p.problems.iter().any(|x| matches!(x, Problem::Blocker { resolved: true, .. })));
-        assert!(!p.ok());
+        assert!(p.problems.iter().any(|x| x.is_blocking()) || !p.suggestions.is_empty());
     }
 
     #[test]

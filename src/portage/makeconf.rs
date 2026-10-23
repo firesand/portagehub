@@ -13,8 +13,6 @@ pub struct Assignment {
     pub value: String,
     pub expanded: String,
     pub file: PathBuf,
-    /// Byte range of the whole assignment in the file text.
-    pub span: (usize, usize),
     pub self_ref: bool,
 }
 
@@ -192,11 +190,11 @@ pub fn load() -> MakeConf {
     let mut vars: HashMap<String, String> = HashMap::new();
     for f in files {
         let text = std::fs::read_to_string(&f).unwrap_or_default();
-        for (name, value, span) in scan(&text) {
+        for (name, value, _) in scan(&text) {
             let expanded = expand(&value, &vars).split_whitespace().collect::<Vec<_>>().join(" ");
             let self_ref = value.contains(&format!("${{{name}}}")) || value.contains(&format!("${name}"));
             vars.insert(name.clone(), expanded.clone());
-            mc.assignments.push(Assignment { name, value, expanded, file: f.clone(), span, self_ref });
+            mc.assignments.push(Assignment { name, value, expanded, file: f.clone(), self_ref });
         }
         mc.files.push((f, text));
     }
@@ -206,7 +204,7 @@ pub fn load() -> MakeConf {
 /// Rewrite the last assignment of `name` in `text` (or append one).
 pub fn set_var(text: &str, name: &str, value: &str) -> String {
     let quoted = format!("{name}=\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""));
-    let found = scan(text).into_iter().filter(|(n, v, _)| n == name && !v.contains(&format!("${{{name}}}"))).last();
+    let found = scan(text).into_iter().rfind(|(n, v, _)| n == name && !v.contains(&format!("${{{name}}}")));
     match found {
         Some((_, _, (s, e))) => format!("{}{}{}", &text[..s], quoted, &text[e..]),
         None => {

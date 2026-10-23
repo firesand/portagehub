@@ -113,7 +113,6 @@ pub enum Action {
         then: Option<Box<Action>>,
     },
     Reload(Reload),
-    Toast(ToastKind, String),
     Cancel(u64),
     StartHelper,
     LoadDetail(String),
@@ -140,7 +139,6 @@ pub struct Captured {
     pub output: String,
     pub code: Option<i32>,
     pub done: bool,
-    pub job: u64,
 }
 
 pub struct ReviewDialog {
@@ -289,11 +287,10 @@ impl App {
         }
         let tracker = Box::new(Tracker::new(&planned, &history));
         let id = self.exec.alloc_id();
-        let opts = EmergeOptions::default().targets(&["@demo"]);
         self.jobs.push(Job::new(
             id,
             "emerge --update @demo (demo)".into(),
-            JobKind::Emerge { opts, tracker },
+            JobKind::Emerge { tracker },
             Priv::User,
             vec!["emerge".into(), "@demo".into()],
             vec![],

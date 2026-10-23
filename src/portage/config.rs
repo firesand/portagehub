@@ -302,6 +302,8 @@ pub fn describe_atom(a: &Atom) -> String {
     s
 }
 
+// Most lines are entries, so boxing them would only add an allocation per line.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Line {
     Blank,
@@ -347,7 +349,6 @@ pub struct ConfFile {
     pub ignored: bool,
     pub lines: Vec<Line>,
     pub raw: String,
-    pub writable_by_user: bool,
 }
 
 impl ConfFile {
@@ -356,8 +357,7 @@ impl ConfFile {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let ignored = name.starts_with('.') || name.ends_with('~');
         let lines = raw.lines().map(parse_line).collect();
-        let writable_by_user = std::fs::OpenOptions::new().append(true).open(path).is_ok();
-        ConfFile { path: path.to_path_buf(), rel, ignored, lines, raw, writable_by_user }
+        ConfFile { path: path.to_path_buf(), rel, ignored, lines, raw }
     }
 
     pub fn entries(&self) -> impl Iterator<Item = (usize, &Entry)> {
@@ -619,14 +619,7 @@ mod tests {
     #[test]
     fn roundtrip_and_edit() {
         let raw = "# header\napp-misc/foo  bar\n\n#app-misc/baz -x\n";
-        let f = ConfFile {
-            path: "/x".into(),
-            rel: "x".into(),
-            ignored: false,
-            lines: raw.lines().map(parse_line).collect(),
-            raw: raw.into(),
-            writable_by_user: false,
-        };
+        let f = ConfFile { path: "/x".into(), rel: "x".into(), ignored: false, lines: raw.lines().map(parse_line).collect(), raw: raw.into() };
         // Untouched lines keep their original spacing.
         assert_eq!(f.render(), raw);
         let mut e = match &f.lines[3] {

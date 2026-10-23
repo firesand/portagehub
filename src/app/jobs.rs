@@ -18,7 +18,6 @@ pub enum JobKind {
         opts: EmergeOptions,
     },
     Emerge {
-        opts: EmergeOptions,
         tracker: Box<Tracker>,
     },
     Sync,

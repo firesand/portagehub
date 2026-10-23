@@ -26,7 +26,6 @@ pub struct State {
     pub filter: Filter,
     pub query: String,
     pub collapsed: HashSet<String>,
-    pub collapse_all: bool,
 }
 
 enum Row {
@@ -255,7 +254,7 @@ fn library_home(app: &mut App, ui: &mut Ui) {
         if let Some(h) = history {
             w::section(ui, "Longest builds on this machine");
             let mut longest: Vec<(String, std::time::Duration)> = h.by_key.keys().filter_map(|k| h.estimate(k).map(|d| (k.clone(), d))).collect();
-            longest.sort_by(|a, b| b.1.cmp(&a.1));
+            longest.sort_by_key(|x| std::cmp::Reverse(x.1));
             let max = longest.first().map(|x| x.1.as_secs_f32()).unwrap_or(1.0).max(1.0);
             for (k, d) in longest.iter().take(12) {
                 ui.horizontal(|ui| {

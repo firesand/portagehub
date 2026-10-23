@@ -226,7 +226,7 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 fn in_root(root: &Path) -> Helper {
-    let mut h = Helper::start_with(&[("PORTAGEHUB_ROOT", root)]);
+    let h = Helper::start_with(&[("PORTAGEHUB_ROOT", root)]);
     h.until(|e| matches!(e, Event::Ready { .. }), 10);
     h
 }

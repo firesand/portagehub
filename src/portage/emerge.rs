@@ -336,10 +336,6 @@ pub const SPECS: &[Spec] = &[
     },
 ];
 
-pub fn spec(flag: &str) -> Option<&'static Spec> {
-    SPECS.iter().find(|s| s.flag == flag)
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     On,
@@ -476,10 +472,6 @@ impl EmergeOptions {
     pub fn targets(mut self, t: &[&str]) -> Self {
         self.targets = t.iter().map(|s| s.to_string()).collect();
         self
-    }
-
-    pub fn is_on(&self, flag: &str) -> bool {
-        matches!(self.values.get(flag), Some(Value::On) | Some(Value::Yes))
     }
 
     /// Build argv (without the program name).

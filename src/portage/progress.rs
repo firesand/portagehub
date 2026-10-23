@@ -90,7 +90,6 @@ pub struct Tracker {
     pub last_status: String,
     pub jobs_line: String,
     pub messages_for: Vec<String>,
-    pub failed_log: Vec<String>,
 }
 
 fn rx(cell: &'static OnceLock<Regex>, p: &str) -> &'static Regex {
@@ -127,7 +126,6 @@ impl Tracker {
             last_status: "Starting emerge…".into(),
             jobs_line: String::new(),
             messages_for: Vec::new(),
-            failed_log: Vec::new(),
         }
     }
 
