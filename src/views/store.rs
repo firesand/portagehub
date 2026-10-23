@@ -77,8 +77,10 @@ fn hero(app: &mut App, ui: &mut Ui) {
         facts.push(format!("{} packages installed", v.pkgs.len()));
         facts.push(format!("{} in @world", v.world_raw.len()));
     }
-    if let Some(u) = &app.data.updates {
-        facts.push(format!("{} possible updates", u.len()));
+    if let Some((p, _)) = &app.world_plan {
+        facts.push(format!("@world update: {} changes", p.merge_entries().count()));
+    } else if let Some(u) = &app.data.updates {
+        facts.push(format!("{} newer versions", u.len()));
     }
     if let Some(ts) = app.data.last_sync() {
         facts.push(format!("last sync {}", crate::fmt::ago(ts)));
@@ -112,30 +114,7 @@ fn home(app: &mut App, ui: &mut Ui) {
             "New to Gentoo? Packages are built from source by Portage. Browse here, open a package to see its versions and USE flags (optional features), then press INSTALL — PortageHub always shows you a preview of what emerge will do before anything changes.",
         );
 
-        // Updates row
-        let updates = app.data.updates.clone();
-        w::section(ui, &format!("Updates available{}", updates.as_ref().map(|u| format!(" ({})", u.len())).unwrap_or_default()));
-        match &updates {
-            None => {
-                ui.horizontal(|ui| {
-                    ui.add(egui::Spinner::new().color(ACCENT));
-                    ui.label(w::dim("Comparing installed packages with the tree…"));
-                });
-            }
-            Some(u) if u.is_empty() => {
-                ui.label(w::dim(format!("{} Everything installed is at the newest visible version (local estimate).", icon::CHECK_CIRCLE)));
-            }
-            Some(u) => {
-                egui::ScrollArea::horizontal().id_salt("upd-row").show(ui, |ui| {
-                    ui.horizontal_top(|ui| {
-                        for c in u.iter().take(40) {
-                            update_card(app, ui, &c.key, &c.installed, &c.available, &c.repo);
-                        }
-                    });
-                });
-                ui.label(w::dim("Estimate from keywords and your package.* files. The authoritative list comes from the Update preview."));
-            }
-        }
+        updates_section(app, ui);
 
         // News
         if let Some(news) = app.data.news.clone() {
@@ -203,25 +182,207 @@ fn home(app: &mut App, ui: &mut Ui) {
     });
 }
 
-fn update_card(app: &mut App, ui: &mut Ui, key: &str, from: &str, to: &str, repo: &str) {
+fn updates_section(app: &mut App, ui: &mut Ui) {
+    use crate::data::{UpdState, classify};
+    use crate::portage::pretend::{EntryType, Problem};
+    let updates = app.data.updates.clone();
+    let plan = app.world_plan.clone();
+    let checking = app.world_job.and_then(|id| app.job(id)).filter(|j| j.running()).map(|j| j.started.elapsed().as_secs());
+    w::section(ui, &format!("Updates{}", updates.as_ref().map(|u| format!(" ({} newer versions installed)", u.len())).unwrap_or_default()));
+
+    // What emerge itself says.
+    let tint = match &plan {
+        Some((p, _)) if p.problems.iter().any(|x| x.is_blocking()) || p.exit_code.is_some_and(|c| c != 0) => ORANGE,
+        Some(_) => GREEN,
+        None => ACCENT,
+    };
+    w::card_tinted(tint).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            match (&plan, checking) {
+                (_, Some(secs)) => {
+                    ui.add(egui::Spinner::new().color(ACCENT));
+                    ui.label(w::strong("Checking with emerge -uDN @world…"));
+                    ui.label(w::dim(format!("{secs}s · runs in the background as your user, changes nothing")));
+                }
+                (Some((p, ts)), None) => {
+                    let ups = p.merge_entries().filter(|e| matches!(e.status_label(), "UPDATE" | "DOWNGRADE" | "NEW SLOT")).count();
+                    let rebuilds = p.merge_entries().filter(|e| e.status_label() == "REBUILD").count();
+                    let new = p.merge_entries().filter(|e| e.status_label() == "NEW").count();
+                    let skipped = p.problems.iter().filter(|x| matches!(x, Problem::Skipped { .. })).count();
+                    let mut parts = vec![format!("{ups} upgrades"), format!("{rebuilds} rebuilds")];
+                    if new > 0 {
+                        parts.push(format!("{new} new dependencies"));
+                    }
+                    if skipped > 0 {
+                        parts.push(format!("{skipped} skipped"));
+                    }
+                    ui.label(RichText::new(icon::CHECK_CIRCLE).size(18.0).color(tint));
+                    ui.label(w::strong(format!("emerge -uDN @world: {}", parts.join(", "))));
+                    ui.label(w::dim(format!("checked {}", crate::fmt::ago(*ts))));
+                    if p.problems.iter().any(|x| x.is_blocking()) {
+                        ui.label(RichText::new(format!("{} emerge reports problems — open the preview", icon::WARNING)).color(ORANGE));
+                    }
+                }
+                (None, None) => {
+                    ui.label(RichText::new(icon::INFO).size(18.0).color(ACCENT));
+                    ui.label(w::strong("Quick estimate only"));
+                    ui.label(w::dim("not yet confirmed with emerge"));
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if w::primary(ui, icon::ROCKET_LAUNCH, "Review & update").on_hover_text("Open the full preview of emerge -uDN @world").clicked() {
+                    app.push(Action::Pretend((emerge::recipes()[0].build)()));
+                }
+                if checking.is_none() && w::button(ui, icon::ARROWS_CLOCKWISE, if plan.is_some() { "Check again" } else { "Check with emerge" }).clicked() {
+                    app.push(Action::CheckWorld);
+                }
+            });
+        });
+    });
+    ui.add_space(4.0);
+
+    let plan_ref = plan.as_ref().map(|(p, _)| p.as_ref());
+    match &updates {
+        None => {
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new().color(ACCENT));
+                ui.label(w::dim("Comparing installed packages with the tree…"));
+            });
+        }
+        Some(u) => {
+            let mut cards: Vec<(crate::data::UpdateCandidate, UpdState)> = u.iter().map(|c| (c.clone(), classify(c, plan_ref))).collect();
+            // Upgrades emerge plans that the quick estimate did not list.
+            if let Some(p) = plan_ref {
+                for e in p.merge_entries().filter(|e| matches!(e.status_label(), "UPDATE" | "DOWNGRADE" | "NEW SLOT")) {
+                    if !cards.iter().any(|(c, _)| c.key == e.key) {
+                        let old = e.old.first().map(|o| o.split([':']).next().unwrap_or("").to_string()).unwrap_or_default();
+                        cards.push((
+                            crate::data::UpdateCandidate { key: e.key.clone(), installed: old, available: e.version.clone(), repo: e.repo.clone(), slot: e.slot.clone(), held_by: vec![] },
+                            UpdState::WillUpdate,
+                        ));
+                    }
+                }
+            }
+            let rank = |s: &UpdState| match s {
+                UpdState::WillUpdate => 0,
+                UpdState::Unknown => 1,
+                UpdState::Skipped(_) => 2,
+                UpdState::HeldBack(_) => 3,
+                UpdState::NotNeeded => 4,
+            };
+            cards.sort_by(|a, b| rank(&a.1).cmp(&rank(&b.1)).then(a.0.key.cmp(&b.0.key)));
+            if cards.is_empty() {
+                ui.label(w::dim(format!("{} Everything installed is at the newest version you allow.", icon::CHECK_CIRCLE)));
+            } else {
+                egui::ScrollArea::horizontal().id_salt("upd-row").show(ui, |ui| {
+                    ui.horizontal_top(|ui| {
+                        for (c, st) in cards.iter().take(60) {
+                            update_card(app, ui, c, st);
+                        }
+                    });
+                });
+            }
+            // Rebuilds and new dependencies from emerge's plan.
+            if let Some(p) = plan_ref {
+                let others: Vec<_> = p.merge_entries().filter(|e| matches!(e.status_label(), "REBUILD" | "NEW")).collect();
+                if !others.is_empty() {
+                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(w::dim("Also in the @world update:"));
+                        for e in others {
+                            let reason = rebuild_reason(e);
+                            let label = format!("{} {}", if e.status_label() == "NEW" { icon::PLUS } else { icon::ARROWS_CLOCKWISE }, e.key.rsplit('/').next().unwrap_or(&e.key));
+                            let r = w::chip(ui, &label, false).on_hover_text(format!("{} — {}", e.key, reason));
+                            if r.clicked() {
+                                app.push(Action::Open(e.key.clone()));
+                            }
+                        }
+                    });
+                    let _ = EntryType::Ebuild;
+                }
+            }
+            egui::CollapsingHeader::new(RichText::new(format!("{}  Why can this differ from what emerge -uDN @world shows?", icon::QUESTION)).color(TEXT_DIM))
+                .id_salt("upd-why")
+                .show(ui, |ui| {
+                    for (head, text) in [
+                        ("IN @WORLD UPDATE", "emerge will upgrade it as part of the world update."),
+                        ("HELD BACK", "A newer version exists, but an installed package (or one of your sets) only accepts the installed one — e.g. tigervnc needs fltk < 1.4. It updates once that package allows it."),
+                        ("SKIPPED", "emerge tried, found a conflict and skipped it (it says so under “WARNING: One or more updates/rebuilds have been skipped”)."),
+                        ("NOT IN @WORLD", "Nothing you selected depends on it any more, so a world update ignores it. emerge --depclean would remove it; update it from its own page if you still use it."),
+                        ("Rebuilds", "emerge also reinstalls the same version when USE flags changed (--newuse), a library it links to changed its sub-slot, or a better repository now provides it. Those are listed above as “Also in the @world update”."),
+                    ] {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(w::strong(head));
+                            ui.label(w::dim(text));
+                        });
+                    }
+                });
+        }
+    }
+}
+
+fn rebuild_reason(e: &crate::portage::pretend::PlanEntry) -> String {
+    if e.status_label() == "NEW" {
+        return "new dependency".into();
+    }
+    if let Some(old_repo) = e.old.first().and_then(|o| o.split("::").nth(1))
+        && !e.repo.is_empty()
+        && old_repo != e.repo
+    {
+        return format!("moves from ::{old_repo} to ::{}", e.repo);
+    }
+    let changed: Vec<String> = e.use_changes().into_iter().filter(|(_, _, ch)| *ch).map(|(f, on, _)| if on { f } else { format!("-{f}") }).collect();
+    if !changed.is_empty() {
+        return format!("USE flags changed: {}", changed.join(" "));
+    }
+    "rebuild because a library it uses changed (slot/sub-slot)".into()
+}
+
+fn update_card(app: &mut App, ui: &mut Ui, c: &crate::data::UpdateCandidate, st: &crate::data::UpdState) {
+    use crate::data::UpdState;
+    let key = c.key.as_str();
     let (cat, pn) = key.split_once('/').unwrap_or(("", key));
     let size = egui::vec2(210.0, 150.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let p = ui.painter();
     let base = common::category_color(cat);
     let top = egui::Rect::from_min_size(rect.min, egui::vec2(size.x, 88.0));
+    let dimmed = matches!(st, UpdState::NotNeeded | UpdState::HeldBack(_) | UpdState::Skipped(_));
+    let base = if dimmed { w::lerp_color(base, Color32::from_rgb(0x30, 0x38, 0x44), 0.6) } else { base };
     w::paint_vgradient(p, top, w::lerp_color(base, WHITE, 0.15), w::lerp_color(base, Color32::BLACK, 0.3));
-    p.text(top.center(), egui::Align2::CENTER_CENTER, common::category_icon(cat), FontId::proportional(40.0), Color32::from_white_alpha(200));
+    p.text(top.center(), egui::Align2::CENTER_CENTER, common::category_icon(cat), FontId::proportional(40.0), Color32::from_white_alpha(if dimmed { 110 } else { 200 }));
+    // Status ribbon
+    let label = st.label();
+    if !label.is_empty() {
+        let (fg, bg) = match st {
+            UpdState::WillUpdate => (GREEN_TEXT, GREEN_DARK),
+            UpdState::HeldBack(_) => (Color32::from_rgb(0x2b, 0x1a, 0x00), ORANGE),
+            UpdState::Skipped(_) => (WHITE, Color32::from_rgb(0xa3, 0x2e, 0x2e)),
+            _ => (TEXT, Color32::from_rgb(0x3a, 0x46, 0x55)),
+        };
+        let g = ui.painter().layout_no_wrap(label.to_string(), FontId::new(10.5, theme::bold()), fg);
+        let br = egui::Rect::from_min_size(top.min + egui::vec2(6.0, 6.0), g.size() + egui::vec2(10.0, 4.0));
+        p.rect_filled(br, CornerRadius::same(2), bg);
+        p.galley(br.min + egui::vec2(5.0, 2.0), g, fg);
+    }
     let bottom = egui::Rect::from_min_max(egui::pos2(rect.left(), top.bottom()), rect.max);
     p.rect_filled(bottom, CornerRadius::ZERO, if resp.hovered() { CARD_HOVER } else { CARD });
     let mut j = egui::text::LayoutJob::simple_singleline(pn.to_string(), FontId::new(14.0, theme::medium()), WHITE);
     j.wrap = egui::text::TextWrapping::truncate_at_width(size.x - 16.0);
     p.galley(bottom.min + egui::vec2(8.0, 6.0), ui.painter().layout_job(j), WHITE);
-    p.text(bottom.min + egui::vec2(8.0, 30.0), egui::Align2::LEFT_TOP, format!("{from}  {}  {to}", icon::ARROW_RIGHT), FontId::proportional(12.0), GREEN_TEXT);
-    p.text(bottom.min + egui::vec2(8.0, 46.0), egui::Align2::LEFT_TOP, format!("::{repo}"), FontId::proportional(11.0), TEXT_FAINT);
+    let mut vj = egui::text::LayoutJob::simple_singleline(format!("{}  {}  {}", c.installed, icon::ARROW_RIGHT, c.available), FontId::proportional(12.0), if dimmed { TEXT_DIM } else { GREEN_TEXT });
+    vj.wrap = egui::text::TextWrapping::truncate_at_width(size.x - 16.0);
+    p.galley(bottom.min + egui::vec2(8.0, 30.0), ui.painter().layout_job(vj), GREEN_TEXT);
+    p.text(bottom.min + egui::vec2(8.0, 46.0), egui::Align2::LEFT_TOP, format!("::{}", c.repo), FontId::proportional(11.0), TEXT_FAINT);
     if resp.hovered() {
         p.rect_stroke(rect, CornerRadius::ZERO, egui::Stroke::new(1.0, ACCENT), egui::StrokeKind::Inside);
     }
+    let resp = resp.on_hover_ui(|ui| {
+        ui.set_max_width(360.0);
+        ui.label(w::strong(format!("{key}  {} → {}", c.installed, c.available)));
+        ui.label(st.explain());
+    });
     if resp.clicked() {
         app.push(Action::Open(key.to_string()));
     }

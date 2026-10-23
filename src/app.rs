@@ -87,6 +87,7 @@ pub enum Action {
     LoadDetail(String),
     LoadEbuild(PathBuf),
     RePretend,
+    CheckWorld,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +97,8 @@ pub enum JobKind {
     Emerge { opts: EmergeOptions, tracker: Box<Tracker> },
     Sync,
     Capture { tag: String },
+    /// Background `emerge -uDN @world --pretend` for the Store's update list.
+    WorldCheck,
 }
 
 #[derive(Debug, Clone)]
@@ -178,6 +181,7 @@ pub struct App {
     pub details: HashMap<String, Arc<PkgDetail>>,
     pub ebuilds: HashMap<PathBuf, Arc<String>>,
     pub loading: HashSet<Reload>,
+    pending_reload: HashSet<Reload>,
     pub detail_loading: HashSet<String>,
     ebuild_loading: HashSet<PathBuf>,
     data_tx: Sender<DataMsg>,
@@ -206,6 +210,36 @@ pub struct App {
     script: Option<crate::shot::Script>,
     confirm_close: bool,
     allow_close: bool,
+    /// Last `emerge -uDN @world --pretend` result and when it ran.
+    pub world_plan: Option<(Arc<Plan>, i64)>,
+    pub world_job: Option<u64>,
+    world_auto_done: bool,
+}
+
+fn world_cache_path() -> PathBuf {
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    base.join("portagehub").join("world-check.txt")
+}
+
+/// First line: "<unix time> <exit code>", then the raw emerge output.
+fn load_world_cache() -> Option<(Arc<Plan>, i64)> {
+    let text = std::fs::read_to_string(world_cache_path()).ok()?;
+    let (head, body) = text.split_once('\n')?;
+    let mut it = head.split_whitespace();
+    let ts: i64 = it.next()?.parse().ok()?;
+    let code: Option<i32> = it.next().and_then(|c| c.parse().ok());
+    Some((Arc::new(pretend::parse(body, code)), ts))
+}
+
+fn save_world_cache(ts: i64, code: Option<i32>, output: &str) {
+    let p = world_cache_path();
+    if let Some(d) = p.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let _ = std::fs::write(p, format!("{ts} {}\n{output}", code.map(|c| c.to_string()).unwrap_or_else(|| "-".into())));
 }
 
 impl App {
@@ -223,6 +257,7 @@ impl App {
             details: HashMap::new(),
             ebuilds: HashMap::new(),
             loading: HashSet::new(),
+            pending_reload: HashSet::new(),
             detail_loading: HashSet::new(),
             ebuild_loading: HashSet::new(),
             data_tx,
@@ -251,6 +286,9 @@ impl App {
             script: crate::shot::Script::from_env(),
             confirm_close: false,
             allow_close: false,
+            world_plan: load_world_cache(),
+            world_job: None,
+            world_auto_done: false,
         };
         for r in [Reload::Repos, Reload::Vdb, Reload::History, Reload::Config, Reload::MakeConf, Reload::Env] {
             app.spawn_load(r);
@@ -346,7 +384,7 @@ impl App {
     }
 
     pub fn running_count(&self) -> usize {
-        self.jobs.iter().filter(|j| j.running() && !matches!(j.kind, JobKind::Capture { .. })).count() + self.batches.len()
+        self.jobs.iter().filter(|j| j.running() && !matches!(j.kind, JobKind::Capture { .. } | JobKind::WorldCheck)).count() + self.batches.len()
     }
 
     // ------------------------------------------------------------------
@@ -354,6 +392,8 @@ impl App {
 
     pub fn spawn_load(&mut self, r: Reload) {
         if self.loading.contains(&r) {
+            // A load started from older data is still running: redo it when it lands.
+            self.pending_reload.insert(r);
             return;
         }
         let snapshot = self.data.clone();
@@ -535,6 +575,11 @@ impl App {
                 self.ebuilds.insert(p, t);
             }
         }
+        let ready: Vec<Reload> = self.pending_reload.iter().filter(|r| !self.loading.contains(r)).copied().collect();
+        for r in ready {
+            self.pending_reload.remove(&r);
+            self.spawn_load(r);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -668,6 +713,9 @@ impl App {
                 for r in [Reload::Vdb, Reload::History, Reload::Config] {
                     self.spawn_load(r);
                 }
+                if self.settings.auto_world_check {
+                    self.actions.push(Action::CheckWorld);
+                }
                 let out = job.output();
                 if out.contains("needs updating") {
                     self.toast(ToastKind::Warn, "Some configuration files need updating (Configuration → Config updates).");
@@ -684,6 +732,21 @@ impl App {
                 }
                 for r in [Reload::Repos, Reload::History] {
                     self.spawn_load(r);
+                }
+                if ok && self.settings.auto_world_check {
+                    self.actions.push(Action::CheckWorld);
+                }
+            }
+            JobKind::WorldCheck => {
+                if self.world_job == Some(job.id) {
+                    self.world_job = None;
+                }
+                if job.error.is_none() && job.exit.flatten().is_some() {
+                    let out = job.output();
+                    let code = job.exit.flatten();
+                    let ts = crate::fmt::now_ts();
+                    self.world_plan = Some((Arc::new(pretend::parse(&out, code)), ts));
+                    save_world_cache(ts, code, &out);
                 }
             }
             JobKind::Capture { tag } => {
@@ -838,6 +901,17 @@ impl App {
                 if !self.exec.root_ready() && self.exec.helper_state != HelperState::Starting {
                     self.exec.start_helper();
                 }
+            }
+            Action::CheckWorld => {
+                if self.world_job.is_some_and(|id| self.job(id).is_some_and(|j| j.running())) {
+                    return;
+                }
+                let opts = (crate::portage::emerge::recipes()[0].build)();
+                // Low priority: it only reads, and can take a while on big systems.
+                let mut argv = vec!["nice".to_string(), "-n".into(), "19".into(), "emerge".into()];
+                argv.extend(opts.pretend_args());
+                let id = self.start_job("Checking @world updates (emerge --pretend)".into(), argv, vec![], Priv::User, JobKind::WorldCheck, vec![]);
+                self.world_job = Some(id);
             }
             Action::LoadDetail(k) => self.request_detail(&k),
             Action::LoadEbuild(p) => {
@@ -1198,6 +1272,14 @@ impl eframe::App for App {
             self.handle_exec(m);
         }
         self.poll_build_logs();
+        if !self.world_auto_done && self.data.catalog.is_some() && self.data.vdb.is_some() && self.data.repos.is_some() {
+            self.world_auto_done = true;
+            let last_sync = self.data.last_sync().unwrap_or(0);
+            let stale = self.world_plan.as_ref().is_none_or(|(_, ts)| *ts < last_sync || crate::fmt::now_ts() - ts > 6 * 3600);
+            if self.settings.auto_world_check && stale && std::env::var_os("PORTAGEHUB_SCRIPT").is_none() {
+                self.actions.push(Action::CheckWorld);
+            }
+        }
         self.process_actions();
         if self.running_emerge().is_some() {
             self.ctx.request_repaint_after(Duration::from_millis(500));

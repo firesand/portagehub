@@ -306,6 +306,8 @@ pub struct UpdateCandidate {
     pub available: String,
     pub repo: String,
     pub slot: String,
+    /// Installed packages whose dependencies rule out the new version: (cpv, atom).
+    pub held_by: Vec<(String, String)>,
 }
 
 /// Installed packages with a newer visible version in the same slot (estimate).
@@ -332,13 +334,142 @@ pub fn compute_updates(data: &Data) -> Vec<UpdateCandidate> {
                     installed: inst.ver.raw.clone(),
                     available: b.ver.raw.clone(),
                     repo: b.repo.clone(),
-                    slot: slot.clone(),
+                    slot: b.meta.slot().to_string(),
+                    held_by: Vec::new(),
                 });
             }
         }
     }
     out.sort_by(|a, b| a.key.cmp(&b.key));
+    find_held_back(vdb, data.config.as_deref(), &mut out);
     out
+}
+
+/// Mark candidates whose new version is excluded by an installed package's
+/// dependency (e.g. `<x11-libs/fltk-1.4:1` from tigervnc).
+fn find_held_back(vdb: &Vdb, cfg: Option<&PortageConfig>, cands: &mut [UpdateCandidate]) {
+    use crate::portage::dep;
+    let keys: HashSet<&str> = cands.iter().map(|c| c.key.as_str()).collect();
+    let mut by_key: std::collections::HashMap<String, Vec<(String, Atom)>> = Default::default();
+    // Version pins in the world file and in user sets that @world includes.
+    for a in &vdb.world {
+        if keys.contains(a.key().as_str()) && a.ver.is_some() {
+            by_key.entry(a.key()).or_default().push(("@world (world file)".into(), a.clone()));
+        }
+    }
+    if let Some(sets) = cfg.and_then(|c| c.set(ConfKind::Sets)) {
+        for f in sets.files.iter().filter(|f| !f.ignored) {
+            let name = format!("@{}", f.rel);
+            if !vdb.world_sets.iter().any(|w| *w == name) {
+                continue;
+            }
+            for (_, e) in f.entries() {
+                if let Some(a) = &e.atom
+                    && !e.disabled
+                    && a.ver.is_some()
+                    && keys.contains(a.key().as_str())
+                {
+                    by_key.entry(a.key()).or_default().push((format!("your set {name}"), a.clone()));
+                }
+            }
+        }
+    }
+    for p in &vdb.pkgs {
+        let own = p.key();
+        for file in ["RDEPEND", "DEPEND", "BDEPEND", "PDEPEND", "IDEPEND"] {
+            let text = p.read(file);
+            if text.is_empty() || !keys.iter().any(|k| text.contains(k)) {
+                continue;
+            }
+            let tree = dep::parse(&text);
+            let mut atoms = Vec::new();
+            dep::collect_required_atoms(&tree, &mut atoms);
+            for a in atoms {
+                let k = a.key();
+                if a.blocker == 0 && k != own && keys.contains(k.as_str()) {
+                    let list = by_key.entry(k).or_default();
+                    if !list.iter().any(|(c, x)| *c == p.cpv() && x.to_string() == a.to_string()) {
+                        list.push((p.cpv(), a.clone()));
+                    }
+                }
+            }
+        }
+    }
+    for c in cands.iter_mut() {
+        let Some(deps) = by_key.get(&c.key) else { continue };
+        let (cat, pn) = c.key.split_once('/').unwrap_or(("", ""));
+        let (Some(old), Some(new)) = (Version::parse(&c.installed), Version::parse(&c.available)) else { continue };
+        let inst_slot = vdb.installed(&c.key).iter().find(|i| i.ver == old).map(|i| i.slot.clone()).unwrap_or_default();
+        for (cpv, atom) in deps {
+            if atom.matches(cat, pn, &old, Some(&inst_slot), None) && !atom.matches(cat, pn, &new, Some(&c.slot), None) {
+                c.held_by.push((cpv.clone(), atom.to_string()));
+            }
+        }
+    }
+}
+
+/// What `emerge -uDN @world` does with an installed package that has a newer version.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UpdState {
+    /// Part of the @world update.
+    WillUpdate,
+    /// emerge skipped it because of a conflict (text: what requires the old version).
+    Skipped(String),
+    /// Another installed package or one of your sets only allows the installed version.
+    HeldBack(String),
+    /// Nothing in @world pulls it in any more; depclean would remove it.
+    NotNeeded,
+    /// Not checked with emerge yet.
+    Unknown,
+}
+
+impl UpdState {
+    pub fn label(&self) -> &'static str {
+        match self {
+            UpdState::WillUpdate => "IN @WORLD UPDATE",
+            UpdState::Skipped(_) => "SKIPPED",
+            UpdState::HeldBack(_) => "HELD BACK",
+            UpdState::NotNeeded => "NOT IN @WORLD",
+            UpdState::Unknown => "",
+        }
+    }
+
+    pub fn explain(&self) -> String {
+        match self {
+            UpdState::WillUpdate => "emerge -uDN @world will update this.".into(),
+            UpdState::Skipped(why) => format!("emerge skipped this update because of a conflict: {why}"),
+            UpdState::HeldBack(why) => format!("Held back: {why}. emerge keeps the installed version until that changes."),
+            UpdState::NotNeeded => "Nothing you selected (@world) needs this package any more, so a world update leaves it alone. emerge --depclean would remove it; update it from its page if you still use it.".into(),
+            UpdState::Unknown => "Not checked with emerge yet.".into(),
+        }
+    }
+}
+
+pub fn classify(c: &UpdateCandidate, plan: Option<&crate::portage::pretend::Plan>) -> UpdState {
+    use crate::portage::pretend::Problem;
+    let slot = c.slot.split('/').next().unwrap_or("");
+    let held = || c.held_by.iter().map(|(by, atom)| format!("{by} needs {atom}")).collect::<Vec<_>>().join("; ");
+    let Some(plan) = plan else {
+        return if c.held_by.is_empty() { UpdState::Unknown } else { UpdState::HeldBack(held()) };
+    };
+    let updated = plan.merge_entries().any(|e| {
+        e.key == c.key && e.version != c.installed && (e.slot.is_empty() || e.slot.split('/').next() == Some(slot))
+    });
+    if updated {
+        return UpdState::WillUpdate;
+    }
+    for p in &plan.problems {
+        if let Problem::Skipped { slot_key, required, .. } = p
+            && slot_key.split(':').next() == Some(c.key.as_str())
+        {
+            let why = required.iter().map(|(a, by)| format!("{by} requires {a}")).collect::<Vec<_>>().join("; ");
+            return UpdState::Skipped(why);
+        }
+    }
+    if !c.held_by.is_empty() {
+        return UpdState::HeldBack(held());
+    }
+    UpdState::NotNeeded
 }
 
 /// Atoms in RDEPEND of installed packages that reference `key` ("required by").

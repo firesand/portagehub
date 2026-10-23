@@ -26,6 +26,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             w::switch_row(ui, &mut s.review_writes, "Review changes before writing", "Show a diff of every /etc/portage change before it is saved.");
             w::switch_row(ui, &mut s.backup_on_write, "Keep a backup of replaced files", "Saves file~ next to the original (Portage ignores ~ files).");
             w::switch_row(ui, &mut s.auto_repretend, "Re-check automatically after applying fixes", "After writing emerge's suggested changes, run the preview again.");
+            w::switch_row(ui, &mut s.auto_world_check, "Check updates with emerge in the background", "After start-up (when the last check is older than your last sync or 6 hours), after syncs and after emerges, run emerge -uDN @world --pretend at low priority so the Store shows exactly what a world update will do.");
             w::switch_row(ui, &mut s.pretend_as_root, "Run previews as root", "Normally previews run as your user (no password). Enable if your setup needs root to resolve dependencies.");
             ui.horizontal(|ui| {
                 ui.label("File name for entries PortageHub writes");

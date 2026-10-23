@@ -218,14 +218,17 @@ fn library_home(app: &mut App, ui: &mut Ui) {
             && !u.is_empty()
         {
             w::section(ui, &format!("Possible updates ({})", u.len()));
-            egui::Grid::new("upd-grid").num_columns(5).striped(true).spacing([18.0, 6.0]).show(ui, |ui| {
+            let plan = app.world_plan.clone();
+            egui::Grid::new("upd-grid").num_columns(6).striped(true).spacing([18.0, 6.0]).show(ui, |ui| {
                 ui.label(w::dim("Package"));
                 ui.label(w::dim("Installed"));
                 ui.label(w::dim("Available"));
                 ui.label(w::dim("Slot"));
+                ui.label(w::dim("emerge -uDN @world"));
                 ui.label(w::dim(""));
                 ui.end_row();
                 for c in u.iter().take(200) {
+                    let st = crate::data::classify(c, plan.as_ref().map(|(p, _)| p.as_ref()));
                     if ui.link(RichText::new(&c.key).color(WHITE)).clicked() {
                         app.library.selected = Some(c.key.clone());
                         app.detail.open(&c.key);
@@ -234,6 +237,11 @@ fn library_home(app: &mut App, ui: &mut Ui) {
                     ui.label(&c.installed);
                     ui.label(RichText::new(&c.available).color(GREEN_TEXT));
                     ui.label(w::dim(&c.slot));
+                    if st.label().is_empty() {
+                        ui.label(w::dim("not checked"));
+                    } else {
+                        w::status_badge(ui, st.label()).on_hover_text(st.explain());
+                    }
                     if ui.small_button(format!("{} Update", icon::ARROW_CIRCLE_UP)).clicked() {
                         app.push(Action::Pretend(EmergeOptions::default().with("--update", Value::On).targets(&[c.key.as_str()])));
                     }

@@ -202,10 +202,10 @@ pub fn badge(ui: &mut Ui, text: &str, fg: Color32, bg: Color32) -> Response {
 pub fn status_badge(ui: &mut Ui, label: &str) -> Response {
     let (fg, bg) = match label {
         "NEW" | "INSTALLED" | "STABLE" | "DONE" => (GREEN_TEXT, GREEN_DARK),
-        "UPDATE" | "NEW SLOT" | "BUILDING" | "BINARY" | "INSTALLING" => (WHITE, Color32::from_rgb(0x1f, 0x5f, 0x99)),
-        "DOWNGRADE" | "TESTING" | "WARNING" | "MASKED?" => (Color32::from_rgb(0x2b, 0x1a, 0x00), ORANGE),
+        "UPDATE" | "NEW SLOT" | "BUILDING" | "BINARY" | "INSTALLING" | "IN @WORLD UPDATE" => (WHITE, Color32::from_rgb(0x1f, 0x5f, 0x99)),
+        "DOWNGRADE" | "TESTING" | "WARNING" | "MASKED?" | "HELD BACK" => (Color32::from_rgb(0x2b, 0x1a, 0x00), ORANGE),
         "REBUILD" | "QUEUED" | "LIVE" | "IN TREE" => (TEXT, Color32::from_rgb(0x3a, 0x46, 0x55)),
-        "BLOCKED" | "FAILED" | "REMOVE" | "MASKED" | "ERROR" => (WHITE, Color32::from_rgb(0xa3, 0x2e, 0x2e)),
+        "BLOCKED" | "FAILED" | "REMOVE" | "MASKED" | "ERROR" | "SKIPPED" => (WHITE, Color32::from_rgb(0xa3, 0x2e, 0x2e)),
         "BLOCKER" | "WORLD" => (WHITE, Color32::from_rgb(0x6b, 0x4f, 0xa8)),
         _ => (TEXT, Color32::from_rgb(0x3a, 0x46, 0x55)),
     };

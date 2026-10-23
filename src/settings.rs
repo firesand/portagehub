@@ -23,6 +23,8 @@ pub struct Settings {
     /// Show plain-language explanations and tips.
     pub beginner_tips: bool,
     pub log_wrap: bool,
+    /// Run `emerge -uDN @world --pretend` in the background to verify the update list.
+    pub auto_world_check: bool,
 }
 
 impl Default for Settings {
@@ -38,6 +40,7 @@ impl Default for Settings {
             font_family: None,
             beginner_tips: true,
             log_wrap: false,
+            auto_world_check: true,
         }
     }
 }

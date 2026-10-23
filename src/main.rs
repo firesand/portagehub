@@ -76,7 +76,8 @@ fn self_test() {
     let u = data::compute_updates(&data);
     println!("updates: {} ({:?})", u.len(), t.elapsed());
     for c in u.iter() {
-        println!("  {} {} -> {} ::{}", c.key, c.installed, c.available, c.repo);
+        let held: Vec<String> = c.held_by.iter().map(|(p, a)| format!("{p} needs {a}")).collect();
+        println!("  {} {} -> {} ::{}{}", c.key, c.installed, c.available, c.repo, if held.is_empty() { String::new() } else { format!("   [held back: {}]", held.join("; ")) });
     }
 }
 

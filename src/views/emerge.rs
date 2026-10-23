@@ -893,6 +893,33 @@ fn problem_body(app: &mut App, ui: &mut Ui, p: &Problem, pi: usize, opts: &Emerg
                 }
             });
         }
+        Problem::Skipped { slot_key, candidate, required } => {
+            ui.label(w::dim(format!(
+                "The rest of the update still runs, but {slot_key} stays at the installed version because something requires exactly that version:"
+            )));
+            for (atom, by) in required {
+                ui.horizontal(|ui| {
+                    ui.label(w::mono(atom));
+                    ui.label(w::dim("required by"));
+                    ui.label(w::strong(by));
+                    if let Some(set) = by.strip_prefix('@') {
+                        let path = std::path::PathBuf::from(format!("/etc/portage/sets/{set}"));
+                        if path.exists() && w::primary(ui, icon::PENCIL_SIMPLE, &format!("Edit set {by}")).on_hover_text(format!("Change or remove {atom} to allow {candidate}")).clicked() {
+                            app.config_view.page = super::config::Page::Kind(ConfKind::Sets);
+                            app.config_view.file_filter = Some(path);
+                            app.push(Action::Tab(Tab::Config));
+                        }
+                    } else if let Some(k) = by.trim_start_matches('(').split([',', ' ']).next().and_then(crate::portage::atom::split_cpv).map(|(c, p, _)| format!("{c}/{p}"))
+                        && w::button(ui, icon::INFO, "Open package").clicked()
+                    {
+                        app.push(Action::Open(k));
+                    }
+                });
+            }
+            if required.iter().any(|(_, by)| by.starts_with('@')) {
+                ui.label(w::dim("Your own set pins this version. Edit the set if you want the new one; otherwise this is expected."));
+            }
+        }
         Problem::PreservedLibs => {
             ui.label(w::dim("Old library versions are kept because installed programs still use them. Rebuild those programs to finish the update."));
             if w::primary(ui, icon::WRENCH, "Preview emerge @preserved-rebuild").clicked() {

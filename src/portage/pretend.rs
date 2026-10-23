@@ -148,6 +148,8 @@ pub enum Problem {
     RequiredUse { pkg: String, constraint: Vec<String>, use_line: String },
     Circular { lines: Vec<String>, use_fixes: Vec<(String, String)> },
     Unsatisfied { lines: Vec<String> },
+    /// "One or more updates/rebuilds have been skipped due to a dependency conflict"
+    Skipped { slot_key: String, candidate: String, required: Vec<(String, String)> },
     PreservedLibs,
     News { count: usize },
     ConfigUpdates { count: usize },
@@ -165,6 +167,7 @@ impl Problem {
             Problem::RequiredUse { pkg, .. } => format!("USE flag requirements of {pkg} are not met"),
             Problem::Circular { .. } => "Circular dependencies".to_string(),
             Problem::Unsatisfied { .. } => "Dependencies cannot be satisfied".to_string(),
+            Problem::Skipped { candidate, .. } => format!("Update to {candidate} was skipped"),
             Problem::PreservedLibs => "Preserved libraries need rebuilding".to_string(),
             Problem::News { count } => format!("{count} unread news item(s)"),
             Problem::ConfigUpdates { count } => format!("{count} configuration file(s) need updating"),
@@ -173,7 +176,7 @@ impl Problem {
     }
 
     pub fn is_blocking(&self) -> bool {
-        !matches!(self, Problem::PreservedLibs | Problem::News { .. } | Problem::ConfigUpdates { .. })
+        !matches!(self, Problem::PreservedLibs | Problem::News { .. } | Problem::ConfigUpdates { .. } | Problem::Skipped { .. })
             && !matches!(self, Problem::Blocker { resolved: true, .. })
     }
 }
@@ -427,6 +430,45 @@ pub fn parse(output: &str, exit_code: Option<i32>) -> Plan {
             plan.problems.push(Problem::Ambiguous { name, options });
             continue;
         }
+        if t.starts_with("WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict") {
+            static SKCAND: OnceLock<Regex> = OnceLock::new();
+            let skcand = re(&SKCAND, r"^\s+\((\S+?)(?::\S+)?(?:::\S+)?, [^)]+\).*conflicts with");
+            static SKREQ: OnceLock<Regex> = OnceLock::new();
+            let skreq = re(&SKREQ, r"^\s+(\S+) required by (.+?)\s*$");
+            i += 1;
+            let mut current: Option<(String, String, Vec<(String, String)>)> = None;
+            while i < lines.len() {
+                let l = lines[i];
+                let lt = l.trim();
+                if lt.is_empty() || lt.chars().all(|c| c == '^' || c == ' ') {
+                    i += 1;
+                    continue;
+                }
+                if !l.starts_with(' ') {
+                    if slotkey.is_match(lt) {
+                        if let Some((k, c, r)) = current.take() {
+                            plan.problems.push(Problem::Skipped { slot_key: k, candidate: c, required: r });
+                        }
+                        current = Some((lt.to_string(), String::new(), Vec::new()));
+                        i += 1;
+                        continue;
+                    }
+                    break;
+                }
+                if let Some(cur) = current.as_mut() {
+                    if let Some(m) = skcand.captures(l) {
+                        cur.1 = m[1].to_string();
+                    } else if let Some(m) = skreq.captures(l) {
+                        cur.2.push((m[1].to_string(), m[2].to_string()));
+                    }
+                }
+                i += 1;
+            }
+            if let Some((k, c, r)) = current.take() {
+                plan.problems.push(Problem::Skipped { slot_key: k, candidate: c, required: r });
+            }
+            continue;
+        }
         if t.starts_with("!!! Multiple package instances within a single package slot") {
             i += 1;
             let mut current: Option<SlotConflict> = None;
@@ -675,6 +717,17 @@ It may be possible to solve this problem by using package.mask to
         assert_eq!(c.slot_key, "dev-libs/foo:0");
         assert_eq!(c.candidates.len(), 2);
         assert_eq!(c.pulled_by.len(), 2);
+    }
+
+    #[test]
+    fn skipped_update() {
+        let out = "Total: 10 packages (6 upgrades, 4 reinstalls), Size of downloads: 566181 KiB\n\nWARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:\n\nsys-kernel/cachyos-kernel:7.3.0\n\n  (sys-kernel/cachyos-kernel-7.3.0-r2:7.3.0/7.3.0::CachyOS-kernels, ebuild scheduled for merge) USE=\"autofdo\" ABI_X86=\"(64)\" conflicts with\n    =sys-kernel/cachyos-kernel-7.3.0-r1 required by @kernels-keep \n    ^                          ^^^^^^^^\n\n";
+        let p = parse(out, Some(0));
+        let Some(Problem::Skipped { slot_key, candidate, required }) = p.problems.first() else { panic!("{:?}", p.problems) };
+        assert_eq!(slot_key, "sys-kernel/cachyos-kernel:7.3.0");
+        assert_eq!(candidate, "sys-kernel/cachyos-kernel-7.3.0-r2");
+        assert_eq!(required, &vec![("=sys-kernel/cachyos-kernel-7.3.0-r1".to_string(), "@kernels-keep".to_string())]);
+        assert!(!p.problems[0].is_blocking());
     }
 
     #[test]
