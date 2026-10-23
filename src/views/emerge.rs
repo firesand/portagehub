@@ -497,9 +497,35 @@ fn review(app: &mut App, ui: &mut Ui) {
         plan_table(app, ui, &plan);
         if !plan.depclean.is_empty() {
             w::section(ui, &format!("Would be removed ({})", plan.depclean.len()));
+            let critical: Vec<&String> = plan
+                .depclean
+                .iter()
+                .filter(|c| {
+                    ["sys-kernel/", "sys-devel/gcc-", "sys-devel/binutils-", "sys-libs/glibc-", "dev-lang/python-", "llvm-core/", "sys-devel/llvm-", "sys-apps/portage-", "dev-lang/rust"]
+                        .iter()
+                        .any(|p| c.starts_with(p))
+                })
+                .collect();
+            if !critical.is_empty() {
+                w::callout(
+                    ui,
+                    ORANGE,
+                    icon::WARNING,
+                    &format!(
+                        "This touches toolchain or kernel packages: {}. That is usually fine (old slots/versions), but make sure you are not running the kernel or compiler being removed (check eselect kernel / gcc-config). Add the ones you want to keep to @world first.",
+                        critical.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                    ),
+                );
+            }
             ui.horizontal_wrapped(|ui| {
                 for p in &plan.depclean {
-                    w::badge(ui, p, WHITE, Color32::from_rgb(0x6b, 0x2a, 0x2a));
+                    let key = crate::portage::atom::split_cpv(p).map(|(c, n, _)| format!("{c}/{n}"));
+                    let r = w::badge(ui, p, WHITE, Color32::from_rgb(0x6b, 0x2a, 0x2a)).interact(egui::Sense::click());
+                    if r.on_hover_text("Open package (add it to @world there to keep it)").clicked()
+                        && let Some(k) = key
+                    {
+                        app.push(Action::Open(k));
+                    }
                 }
             });
         }
@@ -562,7 +588,9 @@ fn summary(app: &mut App, ui: &mut Ui, plan: &Plan, opts: &EmergeOptions) {
                 let needs_confirm = removing || opts.action.dangerous();
                 let allowed = can_run && (!needs_confirm || app.emerge.confirm_dangerous);
                 if ui.add_enabled_ui(allowed, |ui| w::big_button(ui, &label, grad, 190.0)).inner.clicked() {
-                    let planned: Vec<(String, String, bool)> = merges.iter().map(|e| (e.cpv.clone(), e.repo.clone(), e.kind == EntryType::Binary)).collect();
+                    let mut planned: Vec<(String, String, bool)> = merges.iter().map(|e| (e.cpv.clone(), e.repo.clone(), e.kind == EntryType::Binary)).collect();
+                    // Removals are quick; track them like binary merges.
+                    planned.extend(plan.depclean.iter().map(|c| (c.clone(), String::new(), true)));
                     app.push(Action::Emerge(opts.clone(), planned));
                     app.emerge.confirm_dangerous = false;
                 }

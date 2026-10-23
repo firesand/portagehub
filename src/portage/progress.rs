@@ -171,10 +171,27 @@ impl Tracker {
         let fetch = rx(&FETCH, r">>> Fetching \((\d+) of (\d+)\) (\S+?)(?:::\S+)?\s*$");
         let dropped = rx(&DROPPED, r"emerge --keep-going: (\S+?)(?:::\S+)? dropped");
         let msgs = rx(&MSGS, r"\* Messages for package (\S+?)(?:::\S+)?:");
+        static UNMERGING: OnceLock<Regex> = OnceLock::new();
+        let unmerging = rx(&UNMERGING, r">>> Unmerging(?: in)? \((\d+) of (\d+)\) (\S+?)(?:\.\.\.)?\s*$");
         let now = Instant::now();
         let t = line.trim();
 
-        if let Some(c) = emerging.captures(t) {
+        if let Some(c) = unmerging.captures(t) {
+            // Unmerges run one after another: the previous one is finished.
+            for it in self.items.iter_mut().filter(|i| i.stage.active()) {
+                it.stage = Stage::Done;
+                it.finished = Some(now);
+            }
+            if let Ok(n) = c[2].parse::<usize>() {
+                self.total = self.total.max(n);
+            }
+            let cpv = c[3].to_string();
+            let it = self.item_mut(&cpv, history);
+            it.stage = Stage::Installing;
+            it.phase = "removing".into();
+            it.started.get_or_insert(now);
+            self.last_status = format!("Removing {} ({} of {})", cpv, &c[1], &c[2]);
+        } else if let Some(c) = emerging.captures(t) {
             if let Ok(n) = c[3].parse::<usize>() {
                 self.total = self.total.max(n);
             }
@@ -364,6 +381,19 @@ mod tests {
         assert_eq!(t.items[1].stage, Stage::Failed);
         assert_eq!(t.items[1].phase, "failed in compile");
         assert!((t.fraction() - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn unmerge_progress() {
+        let h = History::default();
+        let mut t = Tracker::new(&[("a/b-1".into(), String::new(), true), ("c/d-2".into(), String::new(), true)], &h);
+        t.feed(">>> Unmerging (1 of 2) a/b-1...", &h);
+        assert_eq!(t.items[0].stage, Stage::Installing);
+        t.feed(">>> Unmerging (2 of 2) c/d-2...", &h);
+        assert_eq!(t.items[0].stage, Stage::Done);
+        assert_eq!(t.items[1].stage, Stage::Installing);
+        t.finish(true);
+        assert_eq!(t.counts().0, 2);
     }
 
     #[test]

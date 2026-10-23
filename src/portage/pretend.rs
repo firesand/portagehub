@@ -547,11 +547,11 @@ pub fn parse(output: &str, exit_code: Option<i32>) -> Plan {
             i += 1;
             while i < lines.len() {
                 let l = lines[i].trim();
-                if l.starts_with("All selected packages:") || l.starts_with("selected:") {
-                    let list = l.split_once(':').map(|x| x.1).unwrap_or("");
-                    plan.depclean.extend(list.split_whitespace().map(String::from));
+                // Only the summary line; the per-package "selected:" lines repeat it.
+                if let Some(list) = l.strip_prefix("All selected packages:") {
+                    plan.depclean.extend(list.split_whitespace().map(|a| a.trim_start_matches('=').to_string()));
                 }
-                if l.starts_with(">>> 'Selected' packages") || l.starts_with("Number to remove:") || l.starts_with("Packages installed:") {
+                if l.starts_with("Number to remove:") || l.starts_with(">>> No packages selected for removal") {
                     break;
                 }
                 i += 1;
@@ -675,6 +675,13 @@ It may be possible to solve this problem by using package.mask to
         assert_eq!(c.slot_key, "dev-libs/foo:0");
         assert_eq!(c.candidates.len(), 2);
         assert_eq!(c.pulled_by.len(), 2);
+    }
+
+    #[test]
+    fn depclean_list() {
+        let out = ">>> These are the packages that would be unmerged:\n\n dev-lang/rust-bin\n    selected: 1.97.1 \n   protected: none \n     omitted: 1.98.1 \n\nAll selected packages: =dev-lang/rust-bin-1.97.1 =sys-devel/gcc-14.4.1_p20260716\n\n>>> 'Selected' packages are slated for removal.\nNumber to remove:     2\n";
+        let p = parse(out, Some(0));
+        assert_eq!(p.depclean, vec!["dev-lang/rust-bin-1.97.1", "sys-devel/gcc-14.4.1_p20260716"]);
     }
 
     #[test]

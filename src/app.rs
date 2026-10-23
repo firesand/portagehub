@@ -179,6 +179,7 @@ pub struct App {
     pub ebuilds: HashMap<PathBuf, Arc<String>>,
     pub loading: HashSet<Reload>,
     pub detail_loading: HashSet<String>,
+    ebuild_loading: HashSet<PathBuf>,
     data_tx: Sender<DataMsg>,
     data_rx: Receiver<DataMsg>,
     exec_rx: Receiver<ExecMsg>,
@@ -223,6 +224,7 @@ impl App {
             ebuilds: HashMap::new(),
             loading: HashSet::new(),
             detail_loading: HashSet::new(),
+            ebuild_loading: HashSet::new(),
             data_tx,
             data_rx,
             exec_rx,
@@ -529,6 +531,7 @@ impl App {
                 self.details.insert(k, d);
             }
             DataMsg::Ebuild(p, t) => {
+                self.ebuild_loading.remove(&p);
                 self.ebuilds.insert(p, t);
             }
         }
@@ -838,7 +841,7 @@ impl App {
             }
             Action::LoadDetail(k) => self.request_detail(&k),
             Action::LoadEbuild(p) => {
-                if !self.ebuilds.contains_key(&p) {
+                if !self.ebuilds.contains_key(&p) && self.ebuild_loading.insert(p.clone()) {
                     let tx = self.data_tx.clone();
                     let ctx = self.ctx.clone();
                     std::thread::spawn(move || {
