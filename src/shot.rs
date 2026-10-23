@@ -15,6 +15,8 @@ pub enum Step {
     EmergePage(String),
     ConfigPage(String),
     Search(String),
+    StorePage(String),
+    Category(String),
     Pretend(String),
     Root(String),
     WriteTest,
@@ -52,6 +54,8 @@ impl Script {
                 "epage" => Step::EmergePage(v.to_string()),
                 "cpage" => Step::ConfigPage(v.to_string()),
                 "search" => Step::Search(v.to_string()),
+                "spage" => Step::StorePage(v.to_string()),
+                "category" => Step::Category(v.to_string()),
                 "pretend" => Step::Pretend(v.to_string()),
                 "root" => Step::Root(v.to_string()),
                 "writetest" => Step::WriteTest,
@@ -136,6 +140,22 @@ pub fn run(app: &mut App, ctx: &egui::Context, script: &mut Script) {
                 };
             }
             Step::Search(q) => app.push(Action::Search(q)),
+            Step::StorePage(p) => {
+                use crate::views::store::Page;
+                app.tab = Tab::Store;
+                app.store.show_detail = false;
+                app.store.page = match p.as_str() {
+                    "categories" => Page::Categories,
+                    "search" => Page::Search,
+                    _ => Page::Home,
+                };
+            }
+            Step::Category(c) => {
+                app.tab = Tab::Store;
+                app.store.show_detail = false;
+                app.store.page = crate::views::store::Page::Categories;
+                app.store.category = if c.is_empty() { None } else { Some(c) };
+            }
             Step::Pretend(t) => {
                 let opts = match t.parse::<usize>() {
                     Ok(i) => (crate::portage::emerge::recipes()[i.min(7)].build)(),
