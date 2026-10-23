@@ -6,6 +6,6 @@ Comment=Browse, install and configure Gentoo packages
 Exec=portagehub
 Icon=system-software-install
 Terminal=false
-Categories=System;PackageManager;Settings;
+Categories=System;PackageManager;
 Keywords=gentoo;portage;emerge;packages;overlay;
 StartupWMClass=portagehub
