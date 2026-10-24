@@ -17,7 +17,7 @@ jobs:
     name: fmt, clippy, tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -34,7 +34,7 @@ jobs:
     name: tests on Gentoo (real Portage)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # gentoo/portage carries the ::gentoo tree as a volume; tests run as an
       # unprivileged user, like PortageHub itself (as root the helper ignores
       # the scratch root the file-operation tests use).
