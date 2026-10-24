@@ -147,10 +147,12 @@ mod tests {
         let g = got.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         let sink: Arc<dyn Fn(Event) + Send + Sync> = Arc::new(move |e| {
-            if matches!(e, Event::Exit { .. }) {
+            // Store first, then signal: the test thread reads `got` right after the signal.
+            let exit = matches!(e, Event::Exit { .. });
+            g.lock().unwrap().push(e);
+            if exit {
                 let _ = tx.send(());
             }
-            g.lock().unwrap().push(e);
         });
         spawn_streaming(1, "/bin/sh", &["-c".into(), "printf 'a\\nb\\rc\\n'; exit 3".into()], &[], None, sink).unwrap();
         rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
