@@ -121,6 +121,8 @@ pub enum TxPhase {
     /// `Begin` sent; its id arrives as Data.
     Beginning(Option<String>),
     Open(String),
+    /// All steps ran; the result is being checked before it is committed.
+    Verifying(Option<String>),
     Committing(String),
     /// A step failed with the error; the rollback is running.
     RollingBack(String, String),
@@ -131,6 +133,9 @@ pub enum TxPhase {
 pub enum Step {
     /// Send this operation (in this transaction).
     Send(Op, Option<String>),
+    /// Check the result now and report it with `on_outcome`; a failure rolls
+    /// the transaction back.
+    Verify,
     /// Every step succeeded.
     Done,
     /// A step failed (changes already rolled back when `rolled_back`).
@@ -149,11 +154,13 @@ pub struct Batch {
     pub then: Option<Box<Action>>,
     pub done: usize,
     pub tx: TxPhase,
+    /// Check the result before committing (make.conf writes).
+    pub verify: bool,
 }
 
 impl Batch {
     pub fn new(title: String, ops: Vec<Op>, reload: Vec<Reload>, then: Option<Box<Action>>) -> Batch {
-        Batch { title, ops: ops.into(), current: None, reload, then, done: 0, tx: TxPhase::None }
+        Batch { title, ops: ops.into(), current: None, reload, then, done: 0, tx: TxPhase::None, verify: false }
     }
 
     /// First step. `transactions`: the helper supports Begin/Commit/Rollback.
@@ -172,6 +179,11 @@ impl Batch {
         };
         match self.ops.pop_front() {
             Some(op) => Step::Send(op, tx),
+            None if self.verify => {
+                self.verify = false;
+                self.tx = TxPhase::Verifying(tx);
+                Step::Verify
+            }
             None => match tx {
                 Some(t) => {
                     self.tx = TxPhase::Committing(t.clone());
@@ -207,6 +219,16 @@ impl Batch {
                 self.tx = TxPhase::RollingBack(t.clone(), e);
                 Step::Send(Op::Rollback { transaction: t, force: true }, None)
             }
+            (TxPhase::Verifying(Some(t)), Ok(())) => {
+                self.tx = TxPhase::Committing(t.clone());
+                Step::Send(Op::Commit { transaction: t }, None)
+            }
+            (TxPhase::Verifying(Some(t)), Err(e)) => {
+                self.tx = TxPhase::RollingBack(t.clone(), e);
+                Step::Send(Op::Rollback { transaction: t, force: true }, None)
+            }
+            (TxPhase::Verifying(None), Ok(())) => Step::Done,
+            (TxPhase::Verifying(None), Err(e)) => Step::Failed { error: e, rolled_back: false },
             (TxPhase::Committing(_), Ok(())) => Step::Done,
             (TxPhase::Committing(_), Err(e)) => {
                 Step::Failed { error: format!("changes were saved, but recording them for undo failed: {e}"), rolled_back: false }
@@ -283,6 +305,28 @@ mod tests {
         b.start(true);
         let s = b.on_outcome(Err("unsupported request".into()));
         assert_eq!(sent(&s), (&write("/etc/portage/a"), None));
+        assert_eq!(b.on_outcome(Ok(())), Step::Done);
+    }
+
+    #[test]
+    fn verification_runs_before_commit_and_rolls_back() {
+        let mut b = Batch::new("make.conf".into(), vec![write("/etc/portage/make.conf")], vec![], None);
+        b.verify = true;
+        b.start(true);
+        b.on_data("9-9");
+        b.on_outcome(Ok(()));
+        assert_eq!(b.on_outcome(Ok(())), Step::Verify, "check after the last step, before Commit");
+        let s = b.on_outcome(Err("Portage cannot parse make.conf".into()));
+        assert!(matches!(sent(&s).0, Op::Rollback { transaction, .. } if transaction == "9-9"));
+        assert_eq!(b.on_outcome(Ok(())), Step::Failed { error: "Portage cannot parse make.conf".into(), rolled_back: true });
+
+        let mut b = Batch::new("make.conf".into(), vec![write("/etc/portage/make.conf")], vec![], None);
+        b.verify = true;
+        b.start(true);
+        b.on_data("9-9");
+        b.on_outcome(Ok(()));
+        b.on_outcome(Ok(()));
+        assert!(matches!(sent(&b.on_outcome(Ok(()))).0, Op::Commit { .. }));
         assert_eq!(b.on_outcome(Ok(())), Step::Done);
     }
 

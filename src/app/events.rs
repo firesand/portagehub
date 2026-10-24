@@ -11,6 +11,19 @@ use portagehub::protocol::{Event, Op};
 use std::sync::Arc;
 use std::time::Instant;
 
+/// After a make.conf write, before it is committed: can Portage still read it?
+/// (A broken make.conf is not an error for Portage — it warns and silently
+/// falls back to the profile defaults.)
+fn verify_make_conf() -> Result<(), String> {
+    use crate::portage::makeconf_validate::{self, ParseCheck};
+    match makeconf_validate::strict_parse(std::path::Path::new(crate::portage::makeconf::MAKE_CONF)) {
+        ParseCheck::Error(e) => Err(format!("Portage cannot parse the new make.conf: {e}")),
+        ParseCheck::Ok(_) | ParseCheck::Unavailable(_) => {
+            makeconf_validate::effective(&["CFLAGS", "USE"]).map(|_| ()).map_err(|e| format!("portageq fails with the new make.conf: {e}"))
+        }
+    }
+}
+
 impl App {
     pub(super) fn start_job(
         &mut self,
@@ -314,6 +327,11 @@ impl App {
 
     fn batch_step(&mut self, bi: usize, step: Step) {
         match step {
+            Step::Verify => {
+                let r = verify_make_conf();
+                let step = self.batches[bi].on_outcome(r);
+                self.batch_step(bi, step);
+            }
             Step::Send(op, tx) => {
                 let id = self.exec.root_op_tx(op, tx);
                 self.batches[bi].current = Some(id);

@@ -87,8 +87,17 @@ explains how the root helper is protected.
   `unmask`, `license`, `env`, `properties`, `accept_restrict`, legacy `keywords`,
   sets, profile overrides) in file or directory form: lines become rows with an
   on/off switch (comment/uncomment), edit, delete, a guided “add entry” wizard and a raw
-  editor. Plus make.conf cards (MAKEOPTS sliders, branch, licenses, FEATURES chips,
-  global USE, VIDEO_CARDS/INPUT_DEVICES, all variables with effective values),
+  editor. Plus a **guided make.conf**: what this machine is (threads, RAM, GPU, what
+  `-march=native` resolves to, cpuid2cpuflags), a **health check** that compares the
+  file with the Gentoo documentation (CHOST, -O3/-Ofast, graphite, LDFLAGS and
+  RUSTFLAGS overrides, MAKEOPTS against RAM, disabled sandbox features, ACCEPT_LICENSE,
+  pinned PYTHON_TARGETS, USE_EXPAND variables that belong in package.use, deprecated
+  and root-executed variables …) with a source link and, where safe, a one-click fix;
+  a compiler-flags card that edits only `-O`/`-march` and previews the effective
+  values with Portage itself; and the MAKEOPTS, branch, license, FEATURES, USE and
+  hardware cards. Every make.conf change is checked by Portage's own parser before
+  it is written and again before it is committed (a broken make.conf is otherwise
+  silently ignored by Portage), and rolled back if Portage cannot read it.
   `/etc/portage/env` files with templates, profile switching, news, `._cfg` config
   updates with diffs, and a **stray-file detector** for files Portage silently ignores
   (e.g. `package.accept_keywordschatgpt-desktop`), which it can merge into the right place.
@@ -175,6 +184,8 @@ sudo dist/install.sh
 | `PORTAGEHUB_ROOT` | Testing: a scratch tree the helper (and the change log) use instead of `/`. Ignored when running as root. |
 | `PORTAGEHUB_STRICT_PEER=1` | Testing: apply the root-only peer check to an unprivileged helper too. |
 
+`portagehub --makeconf-check` runs the make.conf health check and checks every
+suggested fix with Portage's parser, without writing anything.
 `portagehub --self-test` prints what was read from your system (repositories, tree,
 installed packages, history, masks, configuration, update estimate) without opening a window.
 

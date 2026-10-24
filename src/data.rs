@@ -34,6 +34,8 @@ pub struct Data {
     pub kernels: Option<Arc<crate::portage::kernel::KernelState>>,
     pub leftovers: Option<Arc<crate::portage::cleanup::Leftovers>>,
     pub audit: Option<Arc<crate::changes::ChangeLog>>,
+    pub tuning: Option<Arc<crate::portage::tuning::Tuning>>,
+    pub health: Option<Arc<Vec<crate::portage::makeconf_check::Finding>>>,
 }
 
 impl Data {
@@ -70,6 +72,10 @@ pub enum Reload {
     Leftovers,
     /// The helper's audit log (admin change history).
     Audit,
+    /// Hardware and toolchain facts for make.conf suggestions.
+    Tuning,
+    /// The make.conf health check.
+    Health,
 }
 
 pub enum DataMsg {
@@ -89,6 +95,8 @@ pub enum DataMsg {
     Kernels(Arc<crate::portage::kernel::KernelState>),
     Leftovers(Arc<crate::portage::cleanup::Leftovers>),
     Audit(Arc<crate::changes::ChangeLog>),
+    Tuning(Arc<crate::portage::tuning::Tuning>),
+    Health(Arc<Vec<crate::portage::makeconf_check::Finding>>),
     Detail(String, Arc<PkgDetail>),
     Ebuild(PathBuf, Arc<String>),
 }

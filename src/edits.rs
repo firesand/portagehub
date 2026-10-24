@@ -7,7 +7,7 @@ use crate::ui::widgets::Tri;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-fn current_text(cfg: &PortageConfig, path: &Path) -> String {
+pub fn current_text(cfg: &PortageConfig, path: &Path) -> String {
     for s in &cfg.sets {
         if let Some(f) = s.file(path) {
             return f.raw.clone();

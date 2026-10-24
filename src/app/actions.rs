@@ -127,6 +127,19 @@ impl App {
                     self.toast(ToastKind::Info, "Nothing to change.");
                     return;
                 }
+                // make.conf is checked with Portage's own parser before anything
+                // is written: a broken file would be silently ignored by Portage.
+                let mc: Vec<(PathBuf, String)> = changes
+                    .iter()
+                    .filter(|c| crate::portage::makeconf::is_make_conf(&c.path))
+                    .filter_map(|c| c.new.clone().map(|n| (c.path.clone(), n)))
+                    .collect();
+                if !mc.is_empty()
+                    && let crate::portage::makeconf_validate::ParseCheck::Error(e) = crate::portage::makeconf_validate::check_candidate(&mc)
+                {
+                    self.toast(ToastKind::Error, format!("Not saved — {e}"));
+                    return;
+                }
                 if self.settings.review_writes {
                     self.review = Some(ReviewDialog { title, changes, reload, then, expanded: 0 });
                 } else {
@@ -192,14 +205,18 @@ impl App {
 
     pub fn apply_changes(&mut self, title: String, changes: Vec<FileChange>, reload: Vec<Reload>, then: Option<Box<Action>>) {
         let backup = self.settings.backup_on_write;
-        let ops = changes
+        let verifies = changes.iter().any(|c| crate::portage::makeconf::is_make_conf(&c.path));
+        let ops: Vec<Op> = changes
             .into_iter()
             .map(|c| match c.new {
                 Some(content) => Op::WriteFile { path: c.path.to_string_lossy().to_string(), content, backup },
                 None => Op::DeleteFile { path: c.path.to_string_lossy().to_string() },
             })
             .collect();
-        self.apply(Action::Batch { title, ops, reload, then });
+        let mut batch = Batch::new(title, ops, reload, then);
+        // make.conf changes are checked once written and rolled back if Portage cannot read them.
+        batch.verify = verifies;
+        self.start_batch(batch);
     }
 
     /// Boot partitions as currently mounted (refreshed at most every 2 s).

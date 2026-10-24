@@ -24,6 +24,8 @@ pub enum Step {
     CheckWorld,
     MPage(String),
     HPage(String),
+    Scroll(f32),
+    MkOpt(String),
     BootScan,
     CleanScan(String),
     Wait(f32),
@@ -69,6 +71,8 @@ impl Script {
                 "checkworld" => Step::CheckWorld,
                 "mpage" => Step::MPage(v.to_string()),
                 "hpage" => Step::HPage(v.to_string()),
+                "scroll" => Step::Scroll(v.parse().unwrap_or(0.0)),
+                "mkopt" => Step::MkOpt(v.to_string()),
                 "bootscan" => Step::BootScan,
                 "cleanscan" => Step::CleanScan(v.to_string()),
                 "wait" => Step::Wait(v.parse().unwrap_or(1.0)),
@@ -195,6 +199,10 @@ pub fn run(app: &mut App, ctx: &egui::Context, script: &mut Script) {
                 });
             }
             Step::CheckWorld => app.push(Action::CheckWorld),
+            Step::MkOpt(o) => app.config_view.mk_opt = Some(o),
+            Step::Scroll(off) => {
+                ctx.data_mut(|d| d.insert_temp(egui::Id::new("script-scroll"), off));
+            }
             Step::HPage(p) => {
                 use crate::views::history::Show;
                 app.tab = Tab::History;

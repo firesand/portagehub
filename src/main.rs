@@ -155,7 +155,60 @@ fn boot_check_cli(path: &str) {
     }
 }
 
+/// `--makeconf-check`: the make.conf health check on this system, with every
+/// fix's candidate make.conf checked by Portage's parser. Writes nothing.
+fn makeconf_check_cli() {
+    use portage::{makeconf_check, makeconf_validate};
+    let repos = portage::repos::load();
+    let repo = repos.get(&repos.main_repo).map(|r| r.location.clone());
+    let locs: Vec<&std::path::Path> = repos.repos.iter().filter(|r| r.exists).map(|r| r.location.as_path()).collect();
+    let usedesc = portage::useflags::load(&locs);
+    let mc = portage::makeconf::load();
+    let cfg = portage::config::load();
+    let env = portage::system::load_env();
+    let vdb = portage::vdb::load();
+    let tuning = portage::tuning::load();
+    let parse = makeconf_validate::strict_parse(std::path::Path::new(portage::makeconf::MAKE_CONF));
+    let arch = env.arch().to_string();
+    let findings = makeconf_check::check(&makeconf_check::Input {
+        mc: &mc,
+        cfg: Some(&cfg),
+        arch: &arch,
+        effective: &env.vars,
+        tuning: Some(&tuning),
+        usedesc: Some(&usedesc),
+        vdb: Some(&vdb),
+        repo: repo.as_deref(),
+        parse: Some(&parse),
+    });
+    println!("strict parse of make.conf: {}", if matches!(parse, makeconf_validate::ParseCheck::Ok(_)) { "OK".to_string() } else { format!("{parse:?}") });
+    for f in &findings {
+        println!("[{}] {} ({})", f.severity.label(), f.title, f.var);
+        if let Some(fix) = &f.fix {
+            let mc_changes: Vec<(std::path::PathBuf, String)> =
+                fix.changes.iter().filter(|c| portage::makeconf::is_make_conf(&c.path)).filter_map(|c| c.new.clone().map(|n| (c.path.clone(), n))).collect();
+            let files: Vec<String> = fix.changes.iter().map(|c| c.path.display().to_string()).collect();
+            let verdict = if mc_changes.is_empty() {
+                "no make.conf change".to_string()
+            } else {
+                match makeconf_validate::check_candidate(&mc_changes) {
+                    makeconf_validate::ParseCheck::Ok(_) => match makeconf_validate::preview(&mc_changes, &[f.var.as_str()]) {
+                        Ok(m) => format!("parses OK; {} would be {:?}", f.var, m.get(&f.var).cloned().unwrap_or_default()),
+                        Err(e) => format!("parses OK; preview failed: {e}"),
+                    },
+                    other => format!("REJECTED: {other:?}"),
+                }
+            };
+            println!("    fix: {} -> {} [{verdict}]", fix.label, files.join(", "));
+        }
+    }
+}
+
 fn main() -> eframe::Result {
+    if std::env::args().any(|a| a == "--makeconf-check") {
+        makeconf_check_cli();
+        return Ok(());
+    }
     if std::env::args().any(|a| a == "--self-test") {
         self_test();
         return Ok(());

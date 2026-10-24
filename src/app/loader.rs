@@ -70,6 +70,7 @@ impl App {
                 return;
             }
             Reload::Kernels if snapshot.vdb.is_none() => return,
+            Reload::Health if snapshot.makeconf.is_none() => return,
             Reload::Leftovers if snapshot.vdb.is_none() || snapshot.catalog.is_none() || snapshot.config.is_none() || snapshot.env.is_none() => return,
             Reload::Updates
                 if snapshot.catalog.is_none() || snapshot.vdb.is_none() || snapshot.env.is_none() || snapshot.config.is_none() || snapshot.masks.is_none() =>
@@ -118,6 +119,26 @@ impl App {
                 Reload::Masks => DataMsg::Masks(Arc::new(crate::portage::profile::load(snapshot.repos.as_ref().unwrap()))),
                 Reload::Kernels => DataMsg::Kernels(Arc::new(crate::portage::kernel::load(snapshot.vdb.as_ref().unwrap(), &keep_set))),
                 Reload::Audit => DataMsg::Audit(Arc::new(crate::changes::load())),
+                Reload::Tuning => DataMsg::Tuning(Arc::new(crate::portage::tuning::load())),
+                Reload::Health => {
+                    use crate::portage::{makeconf_check, makeconf_validate};
+                    let empty = std::collections::HashMap::new();
+                    let parse = makeconf_validate::strict_parse(std::path::Path::new(crate::portage::makeconf::MAKE_CONF));
+                    let repo = snapshot.repos.as_ref().and_then(|r| r.get(&r.main_repo).map(|x| x.location.clone()));
+                    let arch = snapshot.arch();
+                    let input = makeconf_check::Input {
+                        mc: snapshot.makeconf.as_ref().unwrap(),
+                        cfg: snapshot.config.as_deref(),
+                        arch: &arch,
+                        effective: snapshot.env.as_ref().map(|e| &e.vars).unwrap_or(&empty),
+                        tuning: snapshot.tuning.as_deref(),
+                        usedesc: snapshot.usedesc.as_deref(),
+                        vdb: snapshot.vdb.as_deref(),
+                        repo: repo.as_deref(),
+                        parse: Some(&parse),
+                    };
+                    DataMsg::Health(Arc::new(makeconf_check::check(&input)))
+                }
                 Reload::Leftovers => {
                     let env = snapshot.env.as_ref().unwrap();
                     DataMsg::Leftovers(Arc::new(crate::portage::cleanup::scan(
@@ -165,6 +186,13 @@ impl App {
         });
     }
 
+    /// Re-run the make.conf health check if it has been shown.
+    fn refresh_health(&mut self) {
+        if self.data.health.is_some() || self.loading.contains(&Reload::Health) {
+            self.spawn_load(Reload::Health);
+        }
+    }
+
     pub(super) fn invalidate_details(&mut self) {
         self.details.clear();
         self.detail_loading.clear();
@@ -196,6 +224,7 @@ impl App {
             DataMsg::Vdb(v) => {
                 done(self, Reload::Vdb);
                 self.data.vdb = Some(v);
+                self.refresh_health();
                 self.invalidate_details();
                 self.spawn_load(Reload::Updates);
                 self.spawn_load(Reload::Kernels);
@@ -208,6 +237,7 @@ impl App {
             DataMsg::Config(c) => {
                 done(self, Reload::Config);
                 self.data.config = Some(c);
+                self.refresh_health();
                 self.invalidate_details();
                 self.spawn_load(Reload::Updates);
                 self.spawn_load(Reload::Leftovers);
@@ -215,10 +245,12 @@ impl App {
             DataMsg::MakeConf(m) => {
                 done(self, Reload::MakeConf);
                 self.data.makeconf = Some(m);
+                self.refresh_health();
             }
             DataMsg::Env(e) => {
                 done(self, Reload::Env);
                 self.data.env = Some(e);
+                self.refresh_health();
                 self.invalidate_details();
                 self.spawn_load(Reload::Updates);
                 self.spawn_load(Reload::Leftovers);
@@ -226,6 +258,7 @@ impl App {
             DataMsg::UseDesc(u) => {
                 done(self, Reload::UseDesc);
                 self.data.usedesc = Some(u);
+                self.refresh_health();
             }
             DataMsg::RemoteRepos(r) => {
                 done(self, Reload::RemoteRepos);
@@ -254,6 +287,15 @@ impl App {
             DataMsg::Audit(a) => {
                 done(self, Reload::Audit);
                 self.data.audit = Some(a);
+            }
+            DataMsg::Tuning(t) => {
+                done(self, Reload::Tuning);
+                self.data.tuning = Some(t);
+                self.refresh_health();
+            }
+            DataMsg::Health(h) => {
+                done(self, Reload::Health);
+                self.data.health = Some(h);
             }
             DataMsg::Masks(m) => {
                 done(self, Reload::Masks);

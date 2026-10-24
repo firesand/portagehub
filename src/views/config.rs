@@ -56,6 +56,14 @@ pub struct State {
     pub news_open: Option<String>,
     pub mk_raw: Option<String>,
     pub mk_edit: Option<(String, String)>,
+    /// Health check: also list INFO findings.
+    pub mk_show_info: bool,
+    /// Compiler card choices (None: from make.conf).
+    pub mk_opt: Option<String>,
+    pub mk_march: Option<String>,
+    pub mk_preview: Option<(String, super::makeconf_guide::PreviewSlot)>,
+    /// Editing a variable Portage runs as root was confirmed.
+    pub mk_cmd_ok: bool,
     pub env_edit: Option<(PathBuf, String)>,
     pub env_new: String,
     pub profile_pick: Option<usize>,
@@ -707,8 +715,12 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
         common::tip(
             app,
             ui,
-            "The global build settings. The cards below edit the most common variables; every other variable is listed further down. Effective values include what your profile adds.",
+            "The global build settings. Portage reads this file with its own parser (not bash) and, if a line is broken, silently falls back to the profile defaults — so every change here is checked by Portage's parser before it is written and again before it is committed. The health check compares the file with the Gentoo documentation.",
         );
+        super::makeconf_guide::ensure_loaded(app);
+        super::makeconf_guide::machine_card(app, ui);
+        super::makeconf_guide::health(app, ui);
+        super::makeconf_guide::compiler_card(app, ui, &mc);
         let set = |app: &mut App, name: &str, value: String| {
             let new = makeconf::set_var(&text, name, &value);
             app.push(Action::Write {
@@ -754,7 +766,43 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
                 ui.add(egui::Slider::new(&mut l, 0..=threads * 2));
             });
             ui.data_mut(|d| d.insert_temp(id, (j, l)));
-            ui.label(w::dim(format!("This machine has {threads} threads. Each compile job can use ~2 GB RAM for big C++ projects.")));
+            if let Some(t) = app.data.tuning.clone() {
+                let s = crate::portage::tuning::suggest_makeopts(t.hw.threads, t.hw.mem_kib);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "Suggested: -j{} -l{} — min({} threads, {:.1} GiB ÷ 2 = {}). Big C++ builds need up to 2 GB per job.",
+                            s.jobs,
+                            s.load,
+                            t.hw.threads,
+                            t.hw.mem_gib(),
+                            s.ram_jobs
+                        ))
+                        .color(TEXT),
+                    );
+                    if (j, l) != (s.jobs as i64, s.load as i64) && ui.small_button("Use suggestion").clicked() {
+                        (j, l) = (s.jobs as i64, s.load as i64);
+                        ui.data_mut(|d| d.insert_temp(id, (j, l)));
+                    }
+                });
+                let eo: Vec<String> = mc.value("EMERGE_DEFAULT_OPTS").split_whitespace().map(String::from).collect();
+                if let Some(pj) = crate::portage::makeconf_check::opt_num(&eo, "-j", "--jobs").filter(|n| *n > 1.0) {
+                    let total = pj as i64 * j;
+                    ui.label(
+                        RichText::new(format!(
+                            "EMERGE_DEFAULT_OPTS builds {pj} packages at once: up to {total} compile jobs{}.",
+                            if total > s.jobs as i64 {
+                                " — two RAM-hungry builds together can still run out of memory; --load-average limits it most of the time"
+                            } else {
+                                ""
+                            }
+                        ))
+                        .color(if total > s.jobs as i64 { ORANGE } else { TEXT_DIM }),
+                    );
+                }
+            } else {
+                ui.label(w::dim(format!("This machine has {threads} threads. Each compile job can use ~2 GB RAM for big C++ projects.")));
+            }
             let new = if l > 0 { format!("-j{j} -l{l}") } else { format!("-j{j}") };
             if new != cur && ui.add_enabled(editable("MAKEOPTS"), egui::Button::new(format!("{} Save MAKEOPTS=\"{new}\"", icon::FLOPPY_DISK))).clicked() {
                 set(app, "MAKEOPTS", new);
@@ -802,6 +850,13 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
                 }
                 ui.label(w::dim(if cur.is_empty() { "profile default (-* @FREE)".to_string() } else { format!("current: {cur}") }));
             });
+            if cur.split_whitespace().last() == Some("*") {
+                ui.label(RichText::new(format!(
+                    "{} \"*\" accepts every end-user licence agreement without showing it. Narrower values with per-package exceptions are in the health check above.",
+                    icon::WARNING
+                ))
+                .color(ORANGE));
+            }
         });
 
         // FEATURES
@@ -827,7 +882,13 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
                             "off"
                         }
                     ));
-                    if r.clicked() && editable("FEATURES") {
+                    let safety = crate::portage::makeconf_check::SAFETY_CRITICAL.contains(f) || crate::portage::makeconf_check::SAFETY_HIGH.contains(f);
+                    if r.clicked() && safety && (in_mc || eff && !neg) {
+                        app.toast(
+                            crate::app::ToastKind::Warn,
+                            format!("{f} protects the system from build scripts and is not switched off here. If one package needs it off, use a package.env file for that package."),
+                        );
+                    } else if r.clicked() && editable("FEATURES") {
                         let mut t: Vec<String> = toks.iter().filter(|x| x.trim_start_matches('-') != *f).cloned().collect();
                         if !(in_mc || eff && !neg) {
                             t.push(f.to_string());
@@ -901,24 +962,34 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
                 ),
                 ("INPUT_DEVICES", &["libinput", "evdev", "synaptics", "wacom", "joystick"][..]),
             ] {
-                let cur = mc.value(var);
-                let toks: Vec<String> = cur.split_whitespace().map(String::from).collect();
+                // package.use (*/* VAR: -* …) wins over make.conf, which wins over the profile.
+                let from_pkg = super::makeconf_guide::package_use_expand(app, var);
+                let toks: Vec<String> = from_pkg.clone().unwrap_or_else(|| {
+                    let v = mc.value(var);
+                    let v = if v.is_empty() { env.as_ref().map(|e| e.get(var).to_string()).unwrap_or_default() } else { v };
+                    v.split_whitespace().map(String::from).collect()
+                });
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(var).monospace().color(WHITE));
                     w::help(ui, makeconf::describe(var));
                     for o in opts {
                         let on = toks.iter().any(|t| t == o);
-                        if w::chip(ui, o, on).clicked() && editable(var) {
+                        if w::chip(ui, o, on).clicked() {
                             let mut t = toks.clone();
                             if on {
                                 t.retain(|x| x != o);
                             } else {
                                 t.push(o.to_string());
                             }
-                            set(app, var, t.join(" "));
+                            super::makeconf_guide::set_use_expand(app, &mc, var, &t);
                         }
                     }
                 });
+                ui.label(w::dim(match (&from_pkg, mc.last(var).is_some()) {
+                    (Some(_), _) => format!("from package.use/00{} (*/* {var}: -* …)", var.to_lowercase()),
+                    (None, true) => format!("from make.conf — a change moves it to package.use/00{}", var.to_lowercase()),
+                    (None, false) => format!("profile default — a change is saved in package.use/00{}", var.to_lowercase()),
+                }));
             }
         });
 
@@ -941,6 +1012,17 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
                         ui.label(RichText::new(format!("×{}", mc.count(&name))).size(11.0).color(ORANGE))
                             .on_hover_text("Assigned more than once; the last one wins");
                     }
+                    use crate::portage::makeconf_check as chk;
+                    if chk::is_command_var(&name) {
+                        w::badge(ui, "RUNS AS ROOT", Color32::from_rgb(0x2b, 0x1a, 0x00), ORANGE)
+                            .on_hover_text("Portage runs this value as a command, normally as root.");
+                    } else if chk::is_leave_alone(&name) {
+                        w::badge(ui, "PROFILE-OWNED", WHITE, Color32::from_rgb(0xa3, 0x2e, 0x2e))
+                            .on_hover_text("Set by the profile; do not set it in make.conf.");
+                    } else if let Some(r) = chk::deprecated(&name) {
+                        w::badge(ui, "DEPRECATED", TEXT, Color32::from_rgb(0x3a, 0x46, 0x55))
+                            .on_hover_text(r.map(|n| format!("Use {n}")).unwrap_or_else(|| "Configured in repos.conf / binrepos.conf now".into()));
+                    }
                 });
                 let editing = app.config_view.mk_edit.as_ref().is_some_and(|(n, _)| *n == name);
                 if editing {
@@ -955,17 +1037,30 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
                             save = Some(String::from("\u{0}"));
                         }
                     });
+                    let is_cmd = crate::portage::makeconf_check::is_command_var(&name);
+                    if is_cmd {
+                        ui.checkbox(&mut app.config_view.mk_cmd_ok, "I understand Portage runs this command as root");
+                    }
                     if let Some(v) = save {
-                        app.config_view.mk_edit = None;
-                        if v != "\u{0}" {
-                            set(app, &name, v);
+                        if v != "\u{0}" && is_cmd && !app.config_view.mk_cmd_ok {
+                            app.toast(crate::app::ToastKind::Warn, "Confirm that this command runs as root first.");
+                        } else {
+                            app.config_view.mk_edit = None;
+                            app.config_view.mk_cmd_ok = false;
+                            if v != "\u{0}" {
+                                set(app, &name, v);
+                            }
                         }
                     }
                 } else {
                     ui.horizontal(|ui| {
                         ui.add(egui::Label::new(RichText::new(&a.expanded).monospace().size(12.0)).truncate())
                             .on_hover_text(format!("as written: {}", a.value));
-                        if !a.self_ref && a.file == file && w::icon_button(ui, icon::PENCIL_SIMPLE, "Edit").clicked() {
+                        if !a.self_ref
+                            && a.file == file
+                            && !crate::portage::makeconf_check::is_leave_alone(&name)
+                            && w::icon_button(ui, icon::PENCIL_SIMPLE, "Edit").clicked()
+                        {
                             app.config_view.mk_edit = Some((name.clone(), a.value.clone()));
                         }
                     });

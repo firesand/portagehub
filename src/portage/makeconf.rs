@@ -176,11 +176,22 @@ pub fn scan(text: &str) -> Vec<(String, String, (usize, usize))> {
     out
 }
 
+/// Portage skips files named `.*` or `*~` in a make.conf directory.
+pub fn portage_skips(p: &Path) -> bool {
+    let n = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    n.starts_with('.') || n.ends_with('~')
+}
+
+/// Is `p` the make.conf file or a file inside a make.conf directory?
+pub fn is_make_conf(p: &Path) -> bool {
+    p == Path::new(MAKE_CONF) || p.parent() == Some(Path::new(MAKE_CONF))
+}
+
 pub fn load() -> MakeConf {
     let base = Path::new(MAKE_CONF);
     let files: Vec<PathBuf> = if base.is_dir() {
         let mut v: Vec<PathBuf> =
-            std::fs::read_dir(base).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_file() && !p.to_string_lossy().ends_with('~')).collect();
+            std::fs::read_dir(base).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_file() && !portage_skips(p)).collect();
         v.sort();
         v
     } else {
@@ -219,39 +230,160 @@ pub fn set_var(text: &str, name: &str, value: &str) -> String {
     }
 }
 
+/// Assignment spans of `name` in `text`, in order.
+fn spans(text: &str, name: &str) -> Vec<(usize, usize)> {
+    scan(text).into_iter().filter(|(n, _, _)| n == name).map(|(_, _, s)| s).collect()
+}
+
+/// Replace every assignment of `name` with a comment (`note`, when given) —
+/// the variable goes back to the profile default.
+pub fn remove_var(text: &str, name: &str, note: Option<&str>) -> String {
+    let mut out = text.to_string();
+    for (s, e) in spans(text, name).into_iter().rev() {
+        let line_end = if out[e..].starts_with('\n') { e + 1 } else { e };
+        let repl = note.map(|n| format!("# {n}\n")).unwrap_or_default();
+        out.replace_range(s..line_end, &repl);
+    }
+    out
+}
+
+/// Rename every assignment of `old` to `new` (deprecated → current names).
+pub fn rename_var(text: &str, old: &str, new: &str) -> String {
+    let mut out = text.to_string();
+    for (s, e) in spans(text, old).into_iter().rev() {
+        let seg = &out[s..e];
+        if let Some(i) = seg.find(&format!("{old}=")) {
+            out.replace_range(s + i..s + i + old.len(), new);
+        }
+    }
+    out
+}
+
+/// Edit the words of every assignment of `name` in place: `f` gets each word
+/// (a run of characters without whitespace, quotes or line continuation) and
+/// returns its replacement — `None` keeps it, `Some("")` drops it. Layout,
+/// continuations, comments and `${VAR}` references are kept.
+pub fn edit_words(text: &str, name: &str, f: &dyn Fn(&str) -> Option<String>) -> String {
+    let mut out = text.to_string();
+    for (s, e) in spans(text, name).into_iter().rev() {
+        let seg = out[s..e].to_string();
+        let Some(eq) = seg.find('=') else { continue };
+        // Words of the value, up to an unquoted comment.
+        let b = seg.as_bytes();
+        let mut words: Vec<(usize, usize)> = Vec::new();
+        let (mut i, mut quote) = (eq + 1, None::<u8>);
+        while i < b.len() {
+            let c = b[i];
+            match c {
+                b'"' | b'\'' => {
+                    quote = if quote == Some(c) {
+                        None
+                    } else if quote.is_none() {
+                        Some(c)
+                    } else {
+                        quote
+                    };
+                    i += 1;
+                }
+                b'#' if quote.is_none() && (i == 0 || b[i - 1].is_ascii_whitespace()) => break,
+                b'\\' if i + 1 < b.len() && b[i + 1] == b'\n' => i += 2,
+                c if c.is_ascii_whitespace() => i += 1,
+                _ => {
+                    let st = i;
+                    while i < b.len() && !b[i].is_ascii_whitespace() && b[i] != b'"' && b[i] != b'\'' && !(b[i] == b'\\' && b.get(i + 1) == Some(&b'\n')) {
+                        i += 1;
+                    }
+                    words.push((st, i));
+                }
+            }
+        }
+        let mut seg2 = seg.clone();
+        for (ws, we) in words.into_iter().rev() {
+            let Some(r) = f(&seg[ws..we]) else { continue };
+            if r.is_empty() {
+                // Drop the word and one separating space.
+                let (mut ds, mut de) = (ws, we);
+                if seg2[de..].starts_with(' ') {
+                    de += 1;
+                } else if ds > 0 && seg2[..ds].ends_with(' ') {
+                    ds -= 1;
+                }
+                seg2.replace_range(ds..de, "");
+            } else {
+                seg2.replace_range(ws..we, &r);
+            }
+        }
+        out.replace_range(s..e, &seg2);
+    }
+    out
+}
+
 /// Description of well-known variables shown as help text.
 pub fn describe(name: &str) -> &'static str {
     match name {
-        "COMMON_FLAGS" => "Compiler flags shared by CFLAGS/CXXFLAGS/FCFLAGS/FFLAGS in the default make.conf.",
-        "CFLAGS" | "CXXFLAGS" => "C/C++ compiler optimisation flags. Keep them conservative (-O2 -pipe -march=native).",
-        "LDFLAGS" => "Flags passed to the linker.",
-        "MAKEOPTS" => "Options for make: -jN parallel jobs per package, -lN load limit. Rule of thumb: jobs = min(threads, RAM in GB / 2).",
-        "EMERGE_DEFAULT_OPTS" => "Options added to every emerge command (e.g. --jobs, --keep-going, --with-bdeps=y).",
-        "FEATURES" => "Portage features such as ccache, parallel-fetch, buildpkg or getbinpkg.",
-        "USE" => "Global USE flags: optional features enabled or disabled for all packages.",
-        "ACCEPT_KEYWORDS" => "Which branch to use system-wide: 'amd64' (stable) or '~amd64' (testing). Prefer per-package keywords.",
-        "ACCEPT_LICENSE" => "Licenses accepted system-wide. '-* @FREE' accepts only free software; '*' accepts everything.",
-        "VIDEO_CARDS" => "Graphics drivers to build support for (nvidia, amdgpu radeonsi, intel …).",
-        "INPUT_DEVICES" => "Input drivers (libinput is the modern default).",
-        "L10N" => "Languages for translations and documentation (e.g. en-US de).",
-        "LINGUAS" => "Legacy translation selection; prefer L10N.",
-        "GENTOO_MIRRORS" => "Mirrors used to download source archives (distfiles).",
-        "CPU_FLAGS_X86" => "CPU instruction set flags; generate them with app-portage/cpuid2cpuflags.",
-        "PORTAGE_NICENESS" => "Nice value for builds so the desktop stays responsive.",
-        "PORTAGE_SCHEDULING_POLICY" => "CPU scheduling policy for builds (idle, batch, other).",
-        "PYTHON_TARGETS" => "Python implementations packages are built for.",
-        "PYTHON_SINGLE_TARGET" => "The Python implementation used by single-implementation packages.",
-        "RUBY_TARGETS" => "Ruby implementations packages are built for.",
-        "GRUB_PLATFORMS" => "Firmware platforms GRUB is built for (efi-64, pc …).",
-        "RUSTFLAGS" => "Flags passed to rustc.",
-        "PORT_LOGDIR" => "Directory where per-package build logs are saved.",
-        "DISTDIR" => "Where downloaded source archives are stored.",
-        "PKGDIR" => "Where binary packages are stored.",
-        "PORTAGE_TMPDIR" => "Where packages are built (often a tmpfs).",
-        "CCACHE_DIR" | "CCACHE_SIZE" => "ccache location and size (needs FEATURES=ccache).",
-        "CHOST" => "The system's target triple. Do not change on an installed system.",
-        "BINPKG_FORMAT" => "Binary package format (gpkg or xpak).",
-        "LC_MESSAGES" => "Language of build output; C keeps it English for bug reports.",
+        "COMMON_FLAGS" => {
+            "Compiler flags shared by CFLAGS, CXXFLAGS, FCFLAGS and FFLAGS (a Handbook convention). The Gentoo wiki's sane value is \"-march=native -O2 -pipe\": -O3 is not recommended outside test suites and -Ofast/-ffast-math never system-wide. Changing them only affects packages built afterwards."
+        }
+        "CFLAGS" | "CXXFLAGS" | "FCFLAGS" | "FFLAGS" => {
+            "Compiler optimisation flags, normally just \"${COMMON_FLAGS}\". Hardening (PIE, stack protector, FORTIFY) already comes from the toolchain and profile — do not add it by hand."
+        }
+        "LDFLAGS" => {
+            "Linker flags. Not incremental: setting it replaces the profile's -Wl,-O1 -Wl,--as-needed -Wl,-z,pack-relative-relocs, so write LDFLAGS=\"${LDFLAGS} …\" or leave it unset."
+        }
+        "MAKEOPTS" => {
+            "Options for make: -jN parallel compile jobs per package, -lN load limit. Gentoo's rule: jobs = the smaller of CPU threads and RAM ÷ 2 GiB; -l slightly above the thread count. Unset, Portage uses the thread count."
+        }
+        "EMERGE_DEFAULT_OPTS" => {
+            "Options added to every emerge. --jobs N builds N packages at once — that multiplies with MAKEOPTS -j, so pair it with --load-average."
+        }
+        "FEATURES" => {
+            "Portage features. Incremental: make.conf only adds (or removes with -name) on top of the defaults, which already include sandbox, userpriv, network-sandbox, strict and protect-owned — keep those."
+        }
+        "USE" => "Global USE flags. Incremental on top of the profile. Prefer package.use for flags that matter to only a few packages; never put -* here.",
+        "ACCEPT_KEYWORDS" => {
+            "Branch system-wide: the profile already sets stable (amd64). ~amd64 makes the whole system testing and is hard to undo — prefer package.accept_keywords per package."
+        }
+        "ACCEPT_LICENSE" => {
+            "Licenses accepted system-wide; not incremental. The default is \"-* @FREE\". Groups are listed in profiles/license_groups; accept single EULAs per package in package.license."
+        }
+        "VIDEO_CARDS" => {
+            "Graphics drivers to build support for. A USE_EXPAND variable: in make.conf it replaces the profile default, so the wiki prefers package.use (*/* VIDEO_CARDS: -* nvidia)."
+        }
+        "INPUT_DEVICES" => "Input drivers (libinput is the profile default). A USE_EXPAND variable — prefer package.use.",
+        "L10N" => "Languages for translations and documentation as BCP-47 tags (en-US, pt-BR). A USE_EXPAND variable — prefer package.use.",
+        "LINGUAS" => "Old translation selection that makes packages skip locales; use L10N instead.",
+        "GENTOO_MIRRORS" => {
+            "Mirrors for source archives (distfiles). The default is plain http; mirrorselect -S picks https mirrors. Downloads are checked against Manifest digests either way."
+        }
+        "CPU_FLAGS_X86" => {
+            "Instruction sets your CPU supports, used to enable hand-written assembly in ebuilds (different from -march). Generate with app-portage/cpuid2cpuflags into package.use/00cpu-flags."
+        }
+        "PORTAGE_NICENESS" => "Nice value for builds. Unnecessary with PORTAGE_SCHEDULING_POLICY=\"idle\".",
+        "PORTAGE_SCHEDULING_POLICY" => "CPU scheduling policy for builds; \"idle\" keeps the desktop responsive (Portage 3.0.35+).",
+        "PORTAGE_IONICE_COMMAND" => "Command Portage runs (as root) to lower build I/O priority, e.g. \"ionice -c 3 -p \\${PID}\".",
+        "PYTHON_TARGETS" => "Python versions packages are built for. The profile keeps this current — pinning it here blocks upgrades.",
+        "PYTHON_SINGLE_TARGET" => "The Python version for single-implementation packages. Managed by the profile.",
+        "RUBY_TARGETS" => "Ruby versions packages are built for. Managed by the profile.",
+        "LLVM_TARGETS" | "LLVM_SLOT" => "LLVM backends/slot; the tree enables all targets and ebuilds pick the slot — overriding is not recommended.",
+        "GRUB_PLATFORMS" => "Firmware platforms GRUB is built for: efi-64 for UEFI, pc for BIOS.",
+        "RUSTFLAGS" => {
+            "Flags passed to rustc. The wiki advises leaving it unset; Cargo's release profile already uses opt-level 3 and Portage strips binaries itself."
+        }
+        "PORT_LOGDIR" => "Deprecated name of PORTAGE_LOGDIR.",
+        "PORTAGE_LOGDIR" => "Directory where per-package build logs are saved.",
+        "DISTDIR" => "Where downloaded source archives are stored (default /var/cache/distfiles). Must be writable only by root/portage.",
+        "PKGDIR" => "Where binary packages are stored (default /var/cache/binpkgs). Must be writable only by root/portage.",
+        "PORTAGE_TMPDIR" => "Where packages are built (default /var/tmp). A tmpfs speeds little with -pipe; huge packages need a disk-backed override.",
+        "CCACHE_DIR" | "CCACHE_SIZE" => "ccache location and size. The man page warns global ccache causes build failures; use it per package.",
+        "CHOST" => "The system's target triple. Never set it in make.conf on 23.0 profiles; changing it can break the whole system.",
+        "CBUILD" | "CTARGET" => "Cross-compilation triples. Leave alone on a normal system.",
+        "BINPKG_FORMAT" => "Binary package format; gpkg (the default) supports signatures.",
+        "BINPKG_COMPRESS" => "Compression for binary packages (zstd by default).",
+        "LC_MESSAGES" => "Language of build output; C or C.utf8 keeps it English for bug reports.",
+        "FETCHCOMMAND" | "RESUMECOMMAND" | "FETCH_WRAPPER" => "Download command Portage runs (as root) for distfiles.",
+        "PORTAGE_ELOG_SYSTEM" | "PORTAGE_ELOG_CLASSES" => "Where build messages (elog) go and which classes are kept.",
+        "PORTDIR" | "PORTDIR_OVERLAY" | "SYNC" => "Deprecated: repository locations and sync settings belong in /etc/portage/repos.conf.",
+        "PORTAGE_BINHOST" => "Deprecated: binary package hosts belong in /etc/portage/binrepos.conf.",
         _ => "",
     }
 }
@@ -301,6 +433,31 @@ mod tests {
         assert!(t3.contains("USE=\"x y\"\nUSE=\"${USE} b\""));
         let t4 = set_var("A=1\n", "B", "2");
         assert_eq!(t4, "A=1\nB=\"2\"\n");
+    }
+
+    #[test]
+    fn word_edits_keep_layout() {
+        let t = "COMMON_FLAGS=\"-march=alderlake -O3 -pipe \\\n    -fomit-frame-pointer -flto ${WARNING_FLAGS}\" # mine\nCFLAGS=\"${COMMON_FLAGS}\"\n";
+        let t2 = edit_words(t, "COMMON_FLAGS", &|w| (w == "-O3").then(|| "-O2".to_string()));
+        assert_eq!(t2, t.replace("-O3", "-O2"));
+        let t3 = edit_words(t, "COMMON_FLAGS", &|w| (w == "-flto").then(String::new));
+        assert!(t3.contains("-fomit-frame-pointer ${WARNING_FLAGS}\" # mine"), "{t3}");
+        assert!(scan(&t3).len() == 2);
+        // A word inside the trailing comment is not touched.
+        let t4 = edit_words("A=\"x\" # x\n", "A", &|w| (w == "x").then(|| "y".into()));
+        assert_eq!(t4, "A=\"y\" # x\n");
+    }
+
+    #[test]
+    fn remove_and_rename() {
+        let t = "A=1\nVIDEO_CARDS=\"nvidia\"\nB=2\nPORT_LOGDIR=\"/var/log/portage\"\n";
+        let r = remove_var(t, "VIDEO_CARDS", Some("VIDEO_CARDS moved to package.use"));
+        assert_eq!(r, "A=1\n# VIDEO_CARDS moved to package.use\nB=2\nPORT_LOGDIR=\"/var/log/portage\"\n");
+        assert_eq!(remove_var(t, "B", None), "A=1\nVIDEO_CARDS=\"nvidia\"\nPORT_LOGDIR=\"/var/log/portage\"\n");
+        assert!(rename_var(t, "PORT_LOGDIR", "PORTAGE_LOGDIR").contains("\nPORTAGE_LOGDIR=\"/var/log/portage\"\n"));
+        assert!(is_make_conf(Path::new("/etc/portage/make.conf")) && is_make_conf(Path::new("/etc/portage/make.conf/01-flags")));
+        assert!(!is_make_conf(Path::new("/etc/portage/package.use/x")));
+        assert!(portage_skips(Path::new("/etc/portage/make.conf/.hidden")) && !portage_skips(Path::new("/etc/portage/make.conf/a.bak")));
     }
 
     #[test]
