@@ -167,9 +167,12 @@ fn finding_card(app: &mut App, ui: &mut Ui, f: &Finding) {
             ui.label(w::mono(&f.var));
         });
         ui.add(egui::Label::new(RichText::new(&f.detail).color(TEXT)).wrap());
+        let busy = app.is_loading(Reload::Health) || !app.batches.is_empty();
         ui.horizontal(|ui| {
             if let Some(fix) = &f.fix
-                && w::primary(ui, icon::WRENCH, &fix.label)
+                && ui
+                    .add_enabled_ui(!busy, |ui| w::primary(ui, icon::WRENCH, &fix.label))
+                    .inner
                     .on_hover_text(fix.changes.iter().map(|c| c.path.display().to_string()).collect::<Vec<_>>().join("\n"))
                     .clicked()
             {
@@ -231,33 +234,7 @@ pub fn compiler_card(app: &mut App, ui: &mut Ui, mc: &MakeConf) {
             }
         });
         let (o, m) = (o.clone(), m.clone());
-        let mut seen_o = false;
-        let mut seen_m = false;
-        let mut new_text = makeconf::edit_words(&text, var, &|w| {
-            if w.starts_with("-O") {
-                Some(o.clone())
-            } else if w.starts_with("-march=") {
-                Some(format!("-march={m}"))
-            } else {
-                None
-            }
-        });
-        for w in mc.value(var).split_whitespace() {
-            seen_o |= w.starts_with("-O");
-            seen_m |= w.starts_with("-march=");
-        }
-        if !seen_o || !seen_m || mc.last(var).is_none() {
-            // Missing words are added in front, the rest stays as written.
-            let mut v: Vec<String> = Vec::new();
-            if !seen_m {
-                v.push(format!("-march={m}"));
-            }
-            if !seen_o {
-                v.push(o.clone());
-            }
-            let rest = mc.last(var).map(|a| a.value.clone()).unwrap_or_else(|| "-pipe".into());
-            new_text = makeconf::set_var(&new_text, var, &format!("{} {}", v.join(" "), rest.trim()));
-        }
+        let new_text = with_opt_and_march(&text, var, &o, &m);
         let changed = new_text != text;
         ui.add_space(4.0);
         if !changed {
@@ -349,6 +326,38 @@ pub fn compiler_card(app: &mut App, ui: &mut Ui, mc: &MakeConf) {
     });
 }
 
+/// make.conf text with `-O` and `-march` set in the flags variable `var`:
+/// existing words are replaced in place (layout, continuations and
+/// `${VAR}` references kept); missing ones are put in front of the value.
+pub fn with_opt_and_march(text: &str, var: &str, o: &str, m: &str) -> String {
+    let edited = makeconf::edit_words(text, var, &|w| {
+        if w.starts_with("-O") {
+            Some(o.to_string())
+        } else if w.starts_with("-march=") {
+            Some(format!("-march={m}"))
+        } else {
+            None
+        }
+    });
+    let own = format!("${{{var}}}");
+    let value =
+        makeconf::scan(&edited).into_iter().rfind(|(n, v, _)| n == var && !v.contains(&own)).map(|(_, v, _)| v.replace("\\\n", " ")).unwrap_or_default();
+    let words: Vec<&str> = value.split_whitespace().collect();
+    let (has_o, has_m) = (words.iter().any(|w| w.starts_with("-O")), words.iter().any(|w| w.starts_with("-march=")));
+    if has_o && has_m {
+        return edited;
+    }
+    let mut front = Vec::new();
+    if !has_m {
+        front.push(format!("-march={m}"));
+    }
+    if !has_o {
+        front.push(o.to_string());
+    }
+    let rest = if words.is_empty() { "-pipe".to_string() } else { words.join(" ") };
+    makeconf::set_var(&edited, var, &format!("{} {rest}", front.join(" ")))
+}
+
 /// VIDEO_CARDS/INPUT_DEVICES as written in package.use (`*/* VAR: -* …`), if there.
 pub fn package_use_expand(app: &App, var: &str) -> Option<Vec<String>> {
     let set = app.data.config.as_ref()?.set(crate::portage::config::ConfKind::Use)?.clone();
@@ -383,4 +392,23 @@ pub fn set_use_expand(app: &mut App, mc: &MakeConf, var: &str, values: &[String]
         }
     }
     app.push(Action::Write { title: format!("Set {var}"), changes, reload: RELOAD_AFTER_FIX.to_vec(), then: None });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_opt_and_march;
+
+    #[test]
+    fn compiler_flags_are_edited_in_place_or_completed_cleanly() {
+        let t = "COMMON_FLAGS=\"-march=alderlake -O3 -pipe \\\n    -flto ${WARNING_FLAGS}\"\n";
+        assert_eq!(with_opt_and_march(t, "COMMON_FLAGS", "-O2", "alderlake"), t.replace("-O3", "-O2"));
+        // Missing -march in a continued value: no stray backslash, new -O kept.
+        let t = "COMMON_FLAGS=\"-O3 -pipe \\\n  -flto\"\n";
+        assert_eq!(with_opt_and_march(t, "COMMON_FLAGS", "-O2", "alderlake"), "COMMON_FLAGS=\"-march=alderlake -O2 -pipe -flto\"\n");
+        // -march present, -O missing: the new -march survives.
+        let t = "COMMON_FLAGS=\"-march=x86-64 -pipe\"\n";
+        assert_eq!(with_opt_and_march(t, "COMMON_FLAGS", "-O2", "native"), "COMMON_FLAGS=\"-O2 -march=native -pipe\"\n");
+        // Nothing set yet.
+        assert_eq!(with_opt_and_march("A=1\n", "COMMON_FLAGS", "-O2", "native"), "A=1\nCOMMON_FLAGS=\"-march=native -O2 -pipe\"\n");
+    }
 }

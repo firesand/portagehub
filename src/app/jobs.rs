@@ -228,7 +228,10 @@ impl Batch {
                 Step::Send(Op::Rollback { transaction: t, force: true }, None)
             }
             (TxPhase::Verifying(None), Ok(())) => Step::Done,
-            (TxPhase::Verifying(None), Err(e)) => Step::Failed { error: e, rolled_back: false },
+            (TxPhase::Verifying(None), Err(e)) => Step::Failed {
+                error: format!("{e} — the change was written but could not be rolled back (no transaction support); check make.conf in the text editor"),
+                rolled_back: false,
+            },
             (TxPhase::Committing(_), Ok(())) => Step::Done,
             (TxPhase::Committing(_), Err(e)) => {
                 Step::Failed { error: format!("changes were saved, but recording them for undo failed: {e}"), rolled_back: false }

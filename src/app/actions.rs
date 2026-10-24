@@ -204,6 +204,19 @@ impl App {
     }
 
     pub fn apply_changes(&mut self, title: String, changes: Vec<FileChange>, reload: Vec<Reload>, then: Option<Box<Action>>) {
+        // Changes are whole-file rewrites computed from the text read earlier:
+        // if a file changed since (another fix, an editor), writing would undo
+        // that change. Refuse and let the view recompute.
+        if let Some(c) = changes.iter().find(|c| match std::fs::read_to_string(&c.path) {
+            Ok(now) => now != c.old,
+            Err(e) => e.kind() == std::io::ErrorKind::NotFound && !c.old.is_empty(),
+        }) {
+            self.toast(ToastKind::Warn, format!("{} changed since this was prepared — nothing was written. Check again and retry.", c.path.display()));
+            for r in reload {
+                self.spawn_load(r);
+            }
+            return;
+        }
         let backup = self.settings.backup_on_write;
         let verifies = changes.iter().any(|c| crate::portage::makeconf::is_make_conf(&c.path));
         let ops: Vec<Op> = changes

@@ -573,7 +573,8 @@ pub fn check(inp: &Input) -> Vec<Finding> {
             let extra: Vec<String> = mk
                 .iter()
                 .filter(|w| {
-                    opt_num(std::slice::from_ref(w), "-j", "--jobs").is_none()
+                    !matches!(w.as_str(), "-j" | "-l" | "--jobs" | "--load-average")
+                        && opt_num(std::slice::from_ref(w), "-j", "--jobs").is_none()
                         && opt_num(std::slice::from_ref(w), "-l", "--load-average").is_none()
                         && w.parse::<f64>().is_err()
                 })
@@ -842,6 +843,7 @@ pub fn check(inp: &Input) -> Vec<Finding> {
     }
     let mut seen = HashSet::new();
     let dups: BTreeSet<String> = use_words.iter().filter(|w| !seen.insert(w.as_str())).cloned().collect();
+    let use_files: BTreeSet<&PathBuf> = mc.assignments.iter().filter(|a| a.name == "USE").map(|a| &a.file).collect();
     if !dups.is_empty() {
         let counts: RefCell<HashMap<String, usize>> = RefCell::new(use_words.iter().fold(HashMap::new(), |mut m, w| {
             *m.entry(w.clone()).or_insert(0) += 1;
@@ -863,7 +865,9 @@ pub fn check(inp: &Input) -> Vec<Finding> {
             format!("Duplicate USE flags: {}", dups.iter().cloned().collect::<Vec<_>>().join(" ")),
             "Harmless, but noise.".into(),
             links::USE_FLAGS,
-            fix("Remove the duplicates", changes),
+            // Words are visited last-to-first within one file: only offer the fix
+            // when USE lives in a single file.
+            if use_files.len() == 1 { fix("Remove the duplicates", changes) } else { None },
         );
     }
     if let Some(db) = inp.usedesc {
@@ -1089,10 +1093,12 @@ pub fn check(inp: &Input) -> Vec<Finding> {
             });
             push(
                 &mut out,
-                Severity::Medium,
+                Severity::Info,
                 &name,
                 format!("{name} runs \"{first}\" by name"),
-                format!("Portage runs {name} as root; an absolute path makes sure the right program runs: {v}"),
+                format!(
+                    "Portage runs {name} as root. The wiki's own examples use the bare name, which Portage resolves through its PATH; an absolute path pins exactly which program runs: {v}"
+                ),
                 links::MAN,
                 f,
             );
@@ -1232,6 +1238,13 @@ mod tests {
         assert!(mk.detail.contains("min(32, 46.7 ÷ 2 = 23) = 23"), "{}", mk.detail);
         assert!(applied(mk).contains("MAKEOPTS=\"-j23 -l32\""));
         assert!(applied(find(&f, "EMERGE_DEFAULT_OPTS", Severity::Medium)).contains("--jobs=3 --keep-going --load-average=28"));
+        // Separated form: no stray -j left behind.
+        let f = run("MAKEOPTS=\"-j 32 --output-sync\"\n", Some(&machine()), &HashMap::new());
+        assert!(
+            applied(find(&f, "MAKEOPTS", Severity::High)).contains("MAKEOPTS=\"-j23 -l32 --output-sync\""),
+            "{}",
+            applied(find(&f, "MAKEOPTS", Severity::High))
+        );
     }
 
     #[test]
