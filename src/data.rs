@@ -466,12 +466,18 @@ pub fn classify(c: &UpdateCandidate, plan: Option<&crate::portage::pretend::Plan
         return UpdState::WillUpdate;
     }
     for p in &plan.problems {
-        if let Problem::Skipped { slot_key, required, .. } = p
+        if let Problem::Skipped { slot_key, candidate, required } = p
             && slot_key.split(':').next() == Some(c.key.as_str())
         {
-            let why = required.iter().map(|(a, by)| format!("{by} requires {a}")).collect::<Vec<_>>().join("; ");
-            return UpdState::Skipped(why);
+            let reqs = crate::portage::pretend::classify_requirements(slot_key, candidate, required);
+            return UpdState::Skipped(crate::portage::pretend::skipped_summary(&reqs));
         }
+    }
+    if plan.backtrack_skipped.iter().any(|s| s.split(':').next() == Some(c.key.as_str())) {
+        let with: Vec<&str> =
+            plan.problems.iter().filter_map(|p| if let Problem::Skipped { candidate, .. } = p { Some(candidate.as_str()) } else { None }).collect();
+        let with = if with.is_empty() { "another skipped update".to_string() } else { with.join(", ") };
+        return UpdState::Skipped(format!("it has to move together with {with}, which was skipped"));
     }
     if !c.held_by.is_empty() {
         return UpdState::HeldBack(held());

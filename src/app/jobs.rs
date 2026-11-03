@@ -40,6 +40,8 @@ pub enum JobKind {
     Undo {
         tx: String,
     },
+    /// `emerge --pretend` against a private copy of /etc/portage with a fix applied.
+    FixCheck,
 }
 
 #[derive(Debug, Clone)]

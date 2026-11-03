@@ -60,6 +60,49 @@ pub fn add_lines(cfg: &PortageConfig, lines: &[(ConfKind, String)], file_name: &
         .collect()
 }
 
+/// Lines replaced (index, entry) and lines appended, in one file.
+type LineEdits = (Vec<(usize, Entry)>, Vec<String>);
+
+/// Replace lines and append new ones with one change per file, so a replace and
+/// an append in the same file don't overwrite each other.
+pub fn edit_lines(cfg: &PortageConfig, replace: &[(PathBuf, usize, Entry)], append: &[(PathBuf, String)], comment: Option<&str>) -> Vec<FileChange> {
+    let mut per_file: BTreeMap<PathBuf, LineEdits> = BTreeMap::new();
+    for (p, i, e) in replace {
+        per_file.entry(p.clone()).or_default().0.push((*i, e.clone()));
+    }
+    for (p, l) in append {
+        per_file.entry(p.clone()).or_default().1.push(l.clone());
+    }
+    per_file
+        .into_iter()
+        .map(|(path, (replaced, added))| {
+            let f = conf_file(cfg, &path);
+            let old = f.raw.clone();
+            let mut text = old.clone();
+            if !replaced.is_empty() {
+                let mut nf = f.clone();
+                for (i, e) in replaced {
+                    if i < nf.lines.len() {
+                        nf.lines[i] = Line::Entry(e);
+                    }
+                }
+                text = nf.render();
+            }
+            let added: Vec<String> = added.into_iter().filter(|l| !text.lines().any(|x| x.trim() == l.trim())).collect();
+            if !added.is_empty()
+                && let Some(c) = comment
+            {
+                text = config::append_line(&text, &format!("# {c}"));
+            }
+            for l in added {
+                text = config::append_line(&text, &l);
+            }
+            FileChange { path, old, new: Some(text) }
+        })
+        .filter(|c| c.new.as_deref() != Some(c.old.as_str()))
+        .collect()
+}
+
 pub fn replace_entry(cfg: &PortageConfig, path: &Path, idx: usize, entry: Option<Entry>) -> FileChange {
     let f = conf_file(cfg, path);
     let new = config::replace_line(&f, idx, entry.map(Line::Entry));
@@ -241,6 +284,23 @@ mod tests {
         let cfg = cfg_with("# c\napp-misc/a x\napp-misc/b y\napp-misc/c z\n");
         let ch = remove_lines(&cfg, &[("/etc/portage/package.use/a".into(), 1), ("/etc/portage/package.use/a".into(), 3)]);
         assert_eq!(ch[0].new.as_deref(), Some("# c\napp-misc/b y\n"));
+    }
+
+    #[test]
+    fn replace_and_append_in_one_change() {
+        let cfg = cfg_with("dev-qt/qtbase ~amd64\n=dev-python/pyside-6.11.2 ~amd64\n");
+        let path = PathBuf::from("/etc/portage/package.use/a");
+        let ch = edit_lines(
+            &cfg,
+            &[(path.clone(), 1, Entry::new("dev-python/pyside", vec!["~amd64".into()]))],
+            &[(path.clone(), "dev-qt/qtcharts ~amd64".into()), (path.clone(), "dev-qt/qtbase ~amd64".into())],
+            Some("added by PortageHub"),
+        );
+        assert_eq!(ch.len(), 1);
+        assert_eq!(ch[0].old, "dev-qt/qtbase ~amd64\n=dev-python/pyside-6.11.2 ~amd64\n");
+        assert_eq!(ch[0].new.as_deref(), Some("dev-qt/qtbase ~amd64\ndev-python/pyside ~amd64\n# added by PortageHub\ndev-qt/qtcharts ~amd64\n"));
+        // Nothing new: no change, and no lone comment.
+        assert!(edit_lines(&cfg, &[], &[(path, "dev-qt/qtbase ~amd64".into())], Some("x")).is_empty());
     }
 
     #[test]

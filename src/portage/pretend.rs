@@ -223,12 +223,104 @@ pub struct Plan {
     pub exit_code: Option<i32>,
     /// `--tree` output lists packages in reverse merge order.
     pub reverse: bool,
+    /// "The following update(s) have been skipped due to unsatisfied dependencies
+    /// triggered by backtracking": `cat/pn:slot` of updates held back with a skipped one.
+    pub backtrack_skipped: Vec<String>,
+    /// After "packages which cannot be installed at the same time": each package
+    /// emerge could not replace (`cat/pn-ver`) with what pulls it in (atom, required by).
+    pub pulled_in: Vec<(String, Vec<(String, String)>)>,
 }
 
 impl Plan {
     pub fn merge_entries(&self) -> impl Iterator<Item = &PlanEntry> {
         self.entries.iter().filter(|e| matches!(e.kind, EntryType::Ebuild | EntryType::Binary))
     }
+}
+
+/// How one "required by" row of a skipped update relates to the new version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReqKind {
+    /// The new version satisfies the atom except for the old sub-slot (`:6/6.11.2=`):
+    /// emerge rebuilds the requiring package itself.
+    Rebuild,
+    /// The atom excludes the new version (`~cat/pkg-1.2`, `=cat/pkg-1.2*`, `<cat/pkg-1.3`).
+    Pin,
+    /// A version pin in one of the user's sets (`@name`).
+    Set,
+    /// Not parseable, or about another package.
+    Other,
+}
+
+#[derive(Debug, Clone)]
+pub struct Requirement {
+    pub atom: String,
+    pub by: String,
+    pub kind: ReqKind,
+    /// `cat/pn-ver` of the requiring package (`None` for sets and arguments).
+    pub requirer: Option<String>,
+}
+
+/// `cat/pn-ver` from emerge's `(cat/pn-ver:slot/sub::repo, installed) USE="…"`.
+pub fn requirer_cpv(by: &str) -> Option<String> {
+    let inner = by.trim().strip_prefix('(')?;
+    let mut s = inner.split([',', ')', ' ']).next()?;
+    if let Some(i) = s.find("::") {
+        s = &s[..i];
+    }
+    if let Some(i) = s.find(':') {
+        s = &s[..i];
+    }
+    split_cpv(s).map(|_| s.to_string())
+}
+
+/// Sort the rows of a `Problem::Skipped` by whether they really hold the update back.
+pub fn classify_requirements(slot_key: &str, candidate: &str, required: &[(String, String)]) -> Vec<Requirement> {
+    let cand = split_cpv(candidate);
+    let slot = slot_key.split_once(':').map(|(_, s)| s).unwrap_or("0");
+    required
+        .iter()
+        .map(|(atom, by)| {
+            let kind = if by.starts_with('@') {
+                ReqKind::Set
+            } else {
+                match (Atom::parse(atom), &cand) {
+                    (Some(a), Some((c, p, v))) if a.blocker == 0 && a.matches_key(c, p) => {
+                        if a.matches(c, p, v, Some(slot), None) {
+                            ReqKind::Rebuild
+                        } else {
+                            ReqKind::Pin
+                        }
+                    }
+                    _ => ReqKind::Other,
+                }
+            };
+            Requirement { atom: atom.clone(), by: by.clone(), kind, requirer: requirer_cpv(by) }
+        })
+        .collect()
+}
+
+/// One line for the Store: which packages pin the installed version.
+pub fn skipped_summary(reqs: &[Requirement]) -> String {
+    let mut pins: Vec<String> = Vec::new();
+    for r in reqs {
+        let who = match r.kind {
+            ReqKind::Pin => r.requirer.clone().unwrap_or_else(|| r.by.clone()),
+            ReqKind::Set => r.by.clone(),
+            _ => continue,
+        };
+        if !pins.contains(&who) {
+            pins.push(who);
+        }
+    }
+    let rebuilds = reqs.iter().filter(|r| r.kind == ReqKind::Rebuild).count();
+    if pins.is_empty() {
+        let all: Vec<String> = reqs.iter().map(|r| format!("{} requires {}", r.by, r.atom)).collect();
+        return all.join("; ");
+    }
+    let shown = pins.iter().take(6).cloned().collect::<Vec<_>>().join(", ");
+    let more = if pins.len() > 6 { format!(" and {} more", pins.len() - 6) } else { String::new() };
+    let rb = if rebuilds > 0 { format!(" ({rebuilds} other requirement(s) only need a rebuild)") } else { String::new() };
+    format!("{shown}{more} need the installed version{rb}")
 }
 
 fn re(cell: &'static OnceLock<Regex>, pat: &str) -> &'static Regex {
@@ -499,6 +591,44 @@ pub fn parse(output: &str, exit_code: Option<i32>) -> Plan {
             }
             continue;
         }
+        if t.starts_with("* Error: The above package list contains packages which cannot be") {
+            plan.messages.push(t.to_string());
+            static PULLED: OnceLock<Regex> = OnceLock::new();
+            let pulled = re(&PULLED, r"^\s+(\(\S+?, [^)]+\)) pulled in by");
+            static REQ: OnceLock<Regex> = OnceLock::new();
+            let req = re(&REQ, r"^\s+(\S+) required by (.+?)\s*$");
+            i += 1;
+            while i < lines.len() {
+                let l = lines[i];
+                let lt = l.trim();
+                if !lt.is_empty() && !l.starts_with(' ') {
+                    break;
+                }
+                if let Some(c) = pulled.captures(l) {
+                    plan.pulled_in.push((requirer_cpv(&c[1]).unwrap_or_else(|| c[1].to_string()), Vec::new()));
+                } else if let (Some(c), Some(cur)) = (req.captures(l), plan.pulled_in.last_mut()) {
+                    cur.1.push((c[1].to_string(), c[2].to_string()));
+                }
+                i += 1;
+            }
+            continue;
+        }
+        if t.starts_with("!!! The following update(s) have been skipped due to unsatisfied dependencies") {
+            i += 1;
+            while i < lines.len() {
+                let lt = lines[i].trim();
+                if plan.backtrack_skipped.is_empty() && (lt.starts_with("!!!") || lt.is_empty()) {
+                    i += 1;
+                    continue;
+                }
+                if !slotkey.is_match(lt) {
+                    break;
+                }
+                plan.backtrack_skipped.push(lt.to_string());
+                i += 1;
+            }
+            continue;
+        }
         if t.starts_with("!!! Multiple package instances within a single package slot") {
             i += 1;
             let mut current: Option<SlotConflict> = None;
@@ -759,6 +889,119 @@ It may be possible to solve this problem by using package.mask to
         assert_eq!(candidate, "sys-kernel/cachyos-kernel-7.3.0-r2");
         assert_eq!(required, &vec![("=sys-kernel/cachyos-kernel-7.3.0-r1".to_string(), "@kernels-keep".to_string())]);
         assert!(!p.problems[0].is_blocking());
+    }
+
+    /// Real `emerge -pvuDN --with-bdeps=y --complete-graph=y @world` output (2026-11-04): Qt 6.11.3
+    /// skipped because pyside, qtconnectivity, qtspeech, qtwebchannel were keyworded only for
+    /// =…-6.11.2 and qtcharts, qtgraphs not at all, while the rest of Qt accepted ~amd64.
+    const QT_BEFORE: &str = include_str!("../../tests/fixtures/qt-6.11.3-keyword-skip/emerge-before.txt");
+    /// The same run after unpinning those four lines and adding qtcharts and qtgraphs.
+    const QT_AFTER: &str = include_str!("../../tests/fixtures/qt-6.11.3-keyword-skip/emerge-after.txt");
+
+    #[test]
+    fn qt_skipped_by_keywords() {
+        let p = parse(QT_BEFORE, Some(0));
+        assert_eq!(p.merge_entries().count(), 64);
+        assert!(p.total_line.starts_with("Total: 64 packages"));
+        assert_eq!(p.backtrack_skipped.len(), 10);
+        assert_eq!(p.backtrack_skipped[0], "dev-qt/qttools:6");
+        assert_eq!(p.backtrack_skipped[9], "dev-qt/qtlocation:6");
+        let skipped: Vec<_> = p.problems.iter().filter(|x| matches!(x, Problem::Skipped { .. })).collect();
+        assert_eq!(skipped.len(), 1);
+        let Problem::Skipped { slot_key, candidate, required } = skipped[0] else { unreachable!() };
+        assert_eq!(slot_key, "dev-qt/qtbase:6");
+        assert_eq!(candidate, "dev-qt/qtbase-6.11.3");
+        assert!(!p.messages.iter().any(|m| m.contains("triggered by backtracking")));
+
+        let reqs = classify_requirements(slot_key, candidate, required);
+        assert_eq!(reqs.len(), required.len());
+        assert!(!reqs.iter().any(|r| matches!(r.kind, ReqKind::Set | ReqKind::Other)), "{reqs:#?}");
+        let mut pinned: Vec<String> = reqs
+            .iter()
+            .filter(|r| r.kind == ReqKind::Pin)
+            .filter_map(|r| r.requirer.as_deref().and_then(split_cpv).map(|(c, n, _)| format!("{c}/{n}")))
+            .collect();
+        pinned.sort();
+        pinned.dedup();
+        let want = [
+            "dev-python/pyside",
+            "dev-qt/qtcharts",
+            "dev-qt/qtconnectivity",
+            "dev-qt/qtdeclarative",
+            "dev-qt/qtgraphs",
+            "dev-qt/qtmultimedia",
+            "dev-qt/qtquick3d",
+            "dev-qt/qtquicktimeline",
+            "dev-qt/qtshadertools",
+            "dev-qt/qtspeech",
+            "dev-qt/qtsvg",
+            "dev-qt/qttools",
+            "dev-qt/qttranslations",
+            "dev-qt/qtwebchannel",
+        ];
+        assert_eq!(pinned, want);
+        // `>=dev-qt/qtbase-6.11:6/6.11.2=` (pyqt6) and `dev-qt/qtbase:6/6.11.2=` (obs, vlc, avahi) only bind the sub-slot.
+        let rebuild = |cpv: &str| reqs.iter().any(|r| r.kind == ReqKind::Rebuild && r.requirer.as_deref() == Some(cpv));
+        assert!(rebuild("dev-python/pyqt6-6.11.0-r1"));
+        assert!(rebuild("media-video/obs-studio-33.0.1"));
+        assert!(rebuild("kde-apps/kate-26.08.2"));
+        let s = skipped_summary(&reqs);
+        assert!(s.contains("need the installed version") && s.contains("and 8 more") && s.contains("only need a rebuild"), "{s}");
+    }
+
+    #[test]
+    fn qt_after_keyword_fix() {
+        let p = parse(QT_AFTER, Some(0));
+        assert_eq!(p.merge_entries().count(), 116);
+        assert!(p.total_line.starts_with("Total: 116 packages") && p.total_line.contains("48 reinstalls") && p.total_line.contains("2 uninstalls"));
+        assert!(!p.problems.iter().any(|x| matches!(x, Problem::Skipped { .. })));
+        assert!(p.backtrack_skipped.is_empty());
+        let gone: Vec<&str> = p.entries.iter().filter(|e| e.kind == EntryType::Uninstall).map(|e| e.cpv.as_str()).collect();
+        assert_eq!(gone, ["dev-qt/qtwayland-6.11.2", "dev-qt/qtsensors-6.11.2"]);
+        let qtbase = p.merge_entries().find(|e| e.key == "dev-qt/qtbase").unwrap();
+        assert_eq!(qtbase.version, "6.11.3");
+        assert_eq!(qtbase.slot, "6/6.11.3");
+    }
+
+    /// The same keywords with PortageHub's "Update everything" recipe
+    /// (`--update --deep --newuse --with-bdeps=y @world`): unresolved blockers instead of a skip.
+    const QT_RECIPE: &str = include_str!("../../tests/fixtures/qt-6.11.3-keyword-skip/emerge-recipe-before.txt");
+
+    #[test]
+    fn qt_blocked_by_keywords() {
+        let p = parse(QT_RECIPE, Some(1));
+        let blockers: Vec<(&str, &str)> = p
+            .problems
+            .iter()
+            .filter_map(|x| match x {
+                Problem::Blocker { blocker, blocked, hard: false, resolved: false } => Some((blocker.as_str(), blocked.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(blockers.len(), 12);
+        assert!(blockers.iter().all(|(_, b)| *b == "dev-qt/qtbase-6.11.3"));
+        assert!(blockers.contains(&("<dev-qt/qtgraphs-6.11.3:6", "dev-qt/qtbase-6.11.3")));
+        assert!(!p.problems.iter().any(|x| matches!(x, Problem::Skipped { .. })));
+        let stuck: Vec<&str> = p.pulled_in.iter().map(|(c, _)| c.as_str()).collect();
+        assert!(stuck.contains(&"dev-qt/qtwebchannel-6.11.2") && stuck.contains(&"dev-qt/qtcharts-6.11.2"), "{stuck:?}");
+        let web = &p.pulled_in.iter().find(|(c, _)| c == "dev-qt/qtwebchannel-6.11.2").unwrap().1;
+        assert!(web.iter().any(|(a, by)| a == "=dev-qt/qtwebchannel-6.11.2*:6" && by.starts_with("(dev-python/pyside-6.11.2:6/6.11.2::gentoo")));
+        let charts = &p.pulled_in.iter().find(|(c, _)| c == "dev-qt/qtcharts-6.11.2").unwrap().1;
+        assert_eq!(charts, &vec![("dev-qt/qtcharts:6".to_string(), "@selected".to_string())]);
+        assert!(p.messages.iter().any(|m| m.contains("cannot be")));
+    }
+
+    #[test]
+    fn requirer_from_emerge_text() {
+        assert_eq!(requirer_cpv(r#"(dev-qt/qtgraphs-6.11.2:6/6.11.2::gentoo, installed) USE="-custom-cflags""#).as_deref(), Some("dev-qt/qtgraphs-6.11.2"));
+        assert_eq!(requirer_cpv("(app-misc/foo-1.0-r1::guru, ebuild scheduled for merge)").as_deref(), Some("app-misc/foo-1.0-r1"));
+        assert_eq!(requirer_cpv("@kernels-keep"), None);
+        let reqs = classify_requirements(
+            "sys-kernel/cachyos-kernel:7.3.0",
+            "sys-kernel/cachyos-kernel-7.3.0-r2",
+            &[("=sys-kernel/cachyos-kernel-7.3.0-r1".into(), "@kernels-keep".into())],
+        );
+        assert_eq!(reqs[0].kind, ReqKind::Set);
     }
 
     #[test]

@@ -56,6 +56,30 @@ impl App {
                 self.emerge.page = views::emerge::Page::Review;
                 self.tab = Tab::Emerge;
             }
+            Action::CheckFix { slot_key, changes, exact } => {
+                let Some(opts) = self.emerge.plan_opts.clone() else { return };
+                if self.emerge.fix_check.as_ref().is_some_and(|f| f.plan.is_none() && self.job(f.job).is_some_and(|j| j.running())) {
+                    self.toast(ToastKind::Info, "A fix is already being checked.");
+                    return;
+                }
+                let staged: Vec<(PathBuf, Option<String>)> = changes.iter().map(|c| (c.path.clone(), c.new.clone())).collect();
+                let root = match crate::portage::configroot::stage(&staged) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        self.toast(ToastKind::Error, format!("Could not copy /etc/portage for the check: {e}"));
+                        return;
+                    }
+                };
+                let mut env = opts.env.clone();
+                env.retain(|(_, v)| !v.is_empty());
+                env.push(("PORTAGE_CONFIGROOT".into(), root.path().to_string_lossy().to_string()));
+                let mut argv = vec!["emerge".to_string()];
+                argv.extend(opts.pretend_args());
+                // Always as the user: the admin helper refuses PORTAGE_CONFIGROOT, and the copy is ours.
+                let id = self.start_job(format!("Check fix: {}", opts.command_line()), argv, env, Priv::User, JobKind::FixCheck, vec![]);
+                self.emerge.fix_check =
+                    Some(views::emerge::FixCheck { job: id, for_job: self.emerge.pretend_job.unwrap_or(0), slot_key, exact, root: Some(root), plan: None });
+            }
             Action::RePretend => {
                 if let Some(o) = self.emerge.plan_opts.clone().or_else(|| Some(self.emerge.options.clone())) {
                     self.apply(Action::Pretend(o));

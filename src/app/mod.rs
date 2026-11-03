@@ -132,6 +132,13 @@ pub enum Action {
         argv: Vec<String>,
         kind: JobKind,
     },
+    /// Re-run the current preview against a private copy of /etc/portage with
+    /// `changes` applied (nothing real is written).
+    CheckFix {
+        slot_key: String,
+        changes: Vec<FileChange>,
+        exact: bool,
+    },
 }
 
 #[derive(Default)]

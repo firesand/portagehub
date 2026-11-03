@@ -73,7 +73,14 @@ explains how the root helper is protected.
     conflicts with retry options (backtracking, full world update, verbose conflicts,
     autounmask backtracking), blockers, REQUIRED_USE, circular dependencies with USE
     fixes, ambiguous names, missing packages (search / find an overlay), news,
-    preserved libraries and config-file updates.
+    preserved libraries and config-file updates;
+  - **updates held back by your keywords**: when packages released together (all of
+    Qt, KDE Frameworks, LLVM) are keyworded differently, emerge either skips the update
+    or stops on blockers and slot conflicts. PortageHub finds the packages your
+    `package.accept_keywords` holds back, shows the exact lines to change (unpin
+    `=pkg-old ~amd64`, or add the missing line next to the update's own), runs
+    **Check this fix** against a private copy of `/etc/portage` (`PORTAGE_CONFIGROOT`,
+    nothing written) and then applies it with Undo.
 - **Activity** — live progress of running emerges (also for parallel `--jobs`): per
   package stage (queued, building with the current phase from the build log,
   installing, done, failed), elapsed vs. expected time, overall progress and ETA,
@@ -180,7 +187,7 @@ sudo dist/install.sh
 | `PORTAGEHUB_ELEVATE` | Launcher for the helper: `pkexec` (default), another command such as `doas`, or `none` to run it unprivileged (testing). |
 | `PORTAGEHUB_HELPER` | Absolute path of the helper binary to use instead of the one next to the GUI or in `/usr/libexec`. |
 | `PORTAGEHUB_DEMO=1` | Replays a synthetic parallel emerge to try the progress view without building anything. |
-| `PORTAGEHUB_SCRIPT` | UI automation for screenshots, e.g. `tab=library;open=app-editors/vim;dtab=use;wait=2;shot=/tmp/vim.png;exit`. |
+| `PORTAGEHUB_SCRIPT` | UI automation for screenshots, e.g. `tab=library;open=app-editors/vim;dtab=use;wait=2;shot=/tmp/vim.png;exit` (`pretend=0;wait=60;checkfix` runs "Check this fix" on a held-back update). |
 | `PORTAGEHUB_ROOT` | Testing: a scratch tree the helper (and the change log) use instead of `/`. Ignored when running as root. |
 | `PORTAGEHUB_STRICT_PEER=1` | Testing: apply the root-only peer check to an unprivileged helper too. |
 

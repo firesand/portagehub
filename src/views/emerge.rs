@@ -2,15 +2,18 @@
 //! and live progress of running jobs.
 
 use super::common::{self, page, subnav};
-use crate::app::{Action, App, Job, JobKind, Tab};
+use crate::app::{Action, App, FileChange, Job, JobKind, Tab};
 use crate::data::Reload;
 use crate::edits;
 use crate::exec::Priv;
 use crate::portage::config::ConfKind;
+use crate::portage::configroot::Scratch;
 use crate::portage::emerge::{self, Action as EAction, EmergeOptions, Group, Kind, SPECS, Value};
 use crate::portage::history::fmt_duration;
-use crate::portage::pretend::{EntryType, Plan, Problem};
+use crate::portage::pretend::{self, EntryType, Plan, Problem};
 use crate::portage::progress::Stage;
+use crate::portage::skipfix::{self, KeywordFix, Outcome, Pinned, SkipReport};
+use crate::portage::version::Version;
 use crate::ui::theme::{self, *};
 use crate::ui::widgets as w;
 use egui::{Color32, Margin, RichText, Ui};
@@ -42,6 +45,23 @@ pub struct State {
     pub env_makeopts: String,
     /// Start a kernel emerge even though a boot partition is read-only.
     pub boot_override: bool,
+    /// Why updates were skipped, for the preview of this pretend job.
+    pub skip_reports: Option<(u64, Vec<SkipReport>)>,
+    /// The last "Check this fix" run.
+    pub fix_check: Option<FixCheck>,
+}
+
+/// A preview run against a private copy of /etc/portage with a keyword fix applied.
+pub struct FixCheck {
+    pub job: u64,
+    /// The preview whose skipped update it checks.
+    pub for_job: u64,
+    pub slot_key: String,
+    /// Fixes pinned to the checked versions.
+    pub exact: bool,
+    /// The config root; removed when the job ends.
+    pub root: Option<Scratch>,
+    pub plan: Option<Plan>,
 }
 
 pub fn show(app: &mut App, ui: &mut Ui) {
@@ -670,7 +690,9 @@ fn summary(app: &mut App, ui: &mut Ui, plan: &Plan, opts: &EmergeOptions, boot_o
     let history = app.data.history.clone().unwrap_or_default();
     let total_est: u64 = merges.iter().map(|e| if e.kind == EntryType::Binary { 20 } else { history.estimate_or_default(&e.key).0.as_secs() }).sum();
     let unknown = merges.iter().filter(|e| e.kind != EntryType::Binary && history.estimate(&e.key).is_none()).count();
-    let blocking = plan.problems.iter().filter(|p| p.is_blocking()).count() + plan.suggestions.len();
+    let cards = keyword_cards(app, plan);
+    let covered = |i: usize| cards.iter().any(|(_, _, c)| c.contains(&i));
+    let blocking = plan.problems.iter().enumerate().filter(|(i, p)| p.is_blocking() && !covered(*i)).count() + cards.len() + plan.suggestions.len();
     let removing = opts.action == EAction::Depclean || opts.action == EAction::Unmerge;
     let ok = plan.exit_code == Some(0) && blocking == 0;
     w::card_tinted(if ok {
@@ -803,7 +825,25 @@ fn problems(app: &mut App, ui: &mut Ui, plan: &Plan, opts: &EmergeOptions) {
             ui.label(w::dim(format!("into …/{target} of each package.* directory")));
         });
     }
+    // Blockers that keywords explain get one card with the fix.
+    let cards = keyword_cards(app, plan);
+    for (report, blockers, covered) in &cards {
+        ui.add_space(4.0);
+        w::card_tinted(ORANGE).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(icon::WARNING).size(22.0).color(ORANGE));
+                ui.label(
+                    RichText::new(format!("{} is blocked by packages your keywords hold back", report.candidate)).size(15.5).family(theme::bold()).color(WHITE),
+                );
+            });
+            blocked_body(app, ui, report, blockers, covered.len().saturating_sub(blockers.len()));
+        });
+    }
     for (pi, p) in plan.problems.iter().enumerate() {
+        if cards.iter().any(|(_, _, covered)| covered.contains(&pi)) {
+            continue;
+        }
         let (tint, ic) = match p {
             Problem::News { .. } | Problem::PreservedLibs | Problem::ConfigUpdates { .. } => (ACCENT, icon::INFO),
             Problem::Blocker { resolved: true, .. } => (ACCENT, icon::INFO),
@@ -1048,38 +1088,7 @@ fn problem_body(app: &mut App, ui: &mut Ui, p: &Problem, pi: usize, opts: &Emerg
                 }
             });
         }
-        Problem::Skipped { slot_key, candidate, required } => {
-            ui.label(w::dim(format!(
-                "The rest of the update still runs, but {slot_key} stays at the installed version because something requires exactly that version:"
-            )));
-            for (atom, by) in required {
-                ui.horizontal(|ui| {
-                    ui.label(w::mono(atom));
-                    ui.label(w::dim("required by"));
-                    ui.label(w::strong(by));
-                    if let Some(set) = by.strip_prefix('@') {
-                        let path = std::path::PathBuf::from(format!("/etc/portage/sets/{set}"));
-                        if path.exists()
-                            && w::primary(ui, icon::PENCIL_SIMPLE, &format!("Edit set {by}"))
-                                .on_hover_text(format!("Change or remove {atom} to allow {candidate}"))
-                                .clicked()
-                        {
-                            app.config_view.page = super::config::Page::Kind(ConfKind::Sets);
-                            app.config_view.file_filter = Some(path);
-                            app.push(Action::Tab(Tab::Config));
-                        }
-                    } else if let Some(k) =
-                        by.trim_start_matches('(').split([',', ' ']).next().and_then(crate::portage::atom::split_cpv).map(|(c, p, _)| format!("{c}/{p}"))
-                        && w::button(ui, icon::INFO, "Open package").clicked()
-                    {
-                        app.push(Action::Open(k));
-                    }
-                });
-            }
-            if required.iter().any(|(_, by)| by.starts_with('@')) {
-                ui.label(w::dim("Your own set pins this version. Edit the set if you want the new one; otherwise this is expected."));
-            }
-        }
+        Problem::Skipped { slot_key, candidate, required } => skipped_body(app, ui, pi, slot_key, candidate, required),
         Problem::PreservedLibs => {
             ui.label(w::dim("Old library versions are kept because installed programs still use them. Rebuild those programs to finish the update."));
             if w::primary(ui, icon::WRENCH, "Preview emerge @preserved-rebuild").clicked() {
@@ -1101,6 +1110,366 @@ fn problem_body(app: &mut App, ui: &mut Ui, p: &Problem, pi: usize, opts: &Emerg
             }
         }
     }
+}
+
+/// Why an update is held back, computed once per preview: it reads the ebuild
+/// metadata of every package involved. `build` gets the loaded data and whether
+/// ~arch is accepted globally.
+fn cached_report(app: &mut App, slot_key: &str, build: impl FnOnce(&crate::data::Data, bool) -> SkipReport) -> Option<SkipReport> {
+    let pid = app.emerge.pretend_job?;
+    let data = &app.data;
+    if data.catalog.is_none() || data.config.is_none() || data.masks.is_none() || data.env.is_none() {
+        return None;
+    }
+    if app.emerge.skip_reports.as_ref().map(|(id, _)| *id) != Some(pid) {
+        app.emerge.skip_reports = Some((pid, Vec::new()));
+    }
+    let reports = &mut app.emerge.skip_reports.as_mut()?.1;
+    if let Some(r) = reports.iter().find(|r| r.slot_key == slot_key) {
+        return Some(r.clone());
+    }
+    let r = build(data, data.env.as_ref().is_some_and(|e| e.accepts_testing()));
+    reports.push(r.clone());
+    Some(r)
+}
+
+fn versions_of(data: &crate::data::Data, key: &str) -> Option<Vec<crate::data::VersionInfo>> {
+    crate::data::build_detail(key, data).map(|d| d.versions)
+}
+
+/// Unresolved soft blockers against a new version (`<dev-qt/qtgraphs-6.11.3:6`
+/// blocking `dev-qt/qtbase-6.11.3`), grouped by that version: (cpv, slot, blocker atoms).
+fn blocker_groups(plan: &Plan) -> Vec<(String, String, Vec<String>)> {
+    let mut out: Vec<(String, String, Vec<String>)> = Vec::new();
+    for p in &plan.problems {
+        let Problem::Blocker { blocker, blocked, hard: false, resolved: false } = p else { continue };
+        let Some(a) = crate::portage::atom::Atom::parse(blocker) else { continue };
+        if a.ver.is_none() || crate::portage::atom::split_cpv(blocked).is_none_or(|(c, n, _)| a.matches_key(&c, &n)) {
+            continue;
+        }
+        match out.iter_mut().find(|(b, _, _)| b == blocked) {
+            Some(g) => g.2.push(blocker.clone()),
+            None => {
+                let slot = plan.merge_entries().find(|e| e.cpv == *blocked).map(|e| e.slot.split('/').next().unwrap_or("0").to_string());
+                out.push((blocked.clone(), slot.unwrap_or_else(|| "0".into()), vec![blocker.clone()]));
+            }
+        }
+    }
+    out
+}
+
+fn skip_fixes(app: &App, report: &SkipReport, exact: bool) -> Vec<(String, KeywordFix)> {
+    let Some(cfg) = app.data.config.as_deref() else { return Vec::new() };
+    let default = edits::target_path(cfg, ConfKind::AcceptKeywords, &app.settings.target_file);
+    report.fixes(cfg, &app.data.arch(), exact, &default)
+}
+
+fn skip_changes(app: &App, fixes: &[(String, KeywordFix)], candidate: &str) -> Vec<FileChange> {
+    let Some(cfg) = app.data.config.as_deref() else { return Vec::new() };
+    let mut replace = Vec::new();
+    let mut append = Vec::new();
+    for (_, f) in fixes {
+        match f {
+            KeywordFix::Replace { path, idx, new, .. } => replace.push((path.clone(), *idx, new.clone())),
+            KeywordFix::Add { path, line } => append.push((path.clone(), line.clone())),
+        }
+    }
+    edits::edit_lines(cfg, &replace, &append, Some(&format!("added by PortageHub so these follow {candidate}")))
+}
+
+fn file_label(p: &std::path::Path) -> String {
+    p.strip_prefix(crate::portage::config::ETC_PORTAGE).map(|r| r.display().to_string()).unwrap_or_else(|_| p.display().to_string())
+}
+
+/// Why emerge skipped an update and, when the user's keywords are the reason,
+/// the lines to change, a dry run of them and the write.
+fn skipped_body(app: &mut App, ui: &mut Ui, pi: usize, slot_key: &str, candidate: &str, required: &[(String, String)]) {
+    ui.label(w::dim(format!("The rest of the update still runs, but {slot_key} stays at the installed version.")));
+    let report = cached_report(app, slot_key, |data, testing| skipfix::analyze(slot_key, candidate, required, testing, |k| versions_of(data, k)));
+    let Some(report) = report else {
+        ui.label(w::dim("Loading package data to explain why…"));
+        skipped_requirements(app, ui, pi, candidate, required);
+        return;
+    };
+    keyword_fix_section(app, ui, &report);
+    let held = app.emerge.plan.as_ref().map(|p| p.backtrack_skipped.join(", ")).unwrap_or_default();
+    if !held.is_empty() {
+        ui.label(w::dim(format!("emerge also held these back with it: {held}.")));
+    }
+    let rebuilds = report.rebuilds();
+    if !rebuilds.is_empty() {
+        egui::CollapsingHeader::new(format!("{} package(s) only need a rebuild against the new version (emerge does that itself)", rebuilds.len()))
+            .id_salt(("skip-rebuilds", pi))
+            .show(ui, |ui| {
+                ui.label(w::mono(rebuilds.join("\n")));
+            });
+    }
+    skipped_requirements(app, ui, pi, candidate, required);
+}
+
+/// Blocker groups that a keyword fix explains: the report, the blocker atoms, and
+/// the problems the card covers (every blocker of that version, and the slot
+/// conflicts emerge prints for the same mismatch).
+fn keyword_cards(app: &mut App, plan: &Plan) -> Vec<(SkipReport, Vec<String>, Vec<usize>)> {
+    let mut out = Vec::new();
+    for (blocked, slot, blockers) in blocker_groups(plan) {
+        let key = crate::portage::atom::split_cpv(&blocked).map(|(c, n, _)| format!("{c}/{n}")).unwrap_or_default();
+        let report = cached_report(app, &format!("{key}:{slot}"), |data, testing| {
+            skipfix::analyze_blocked(&blocked, &slot, &blockers, &plan.pulled_in, testing, |k| versions_of(data, k))
+        });
+        let Some(report) = report.filter(|r| r.causes().next().is_some()) else { continue };
+        let involved = |k: &str| k == key || report.pinned.iter().any(|p| p.key == k);
+        // Siblings released in lockstep share the version number (qttranslations-6.11.3 with qtbase-6.11.3).
+        let version = crate::portage::atom::split_cpv(&blocked).map(|(_, _, v)| v.without_revision().to_string()).unwrap_or_default();
+        let lockstep = |cpv: &str| {
+            pretend::requirer_cpv(&format!("({cpv})"))
+                .and_then(|c| crate::portage::atom::split_cpv(&c))
+                .is_some_and(|(_, _, v)| v.without_revision() == version)
+        };
+        let covered = plan
+            .problems
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| match p {
+                Problem::Blocker { blocked: b, .. } => *b == blocked,
+                Problem::SlotConflict(c) => involved(c.slot_key.split(':').next().unwrap_or("")) || c.candidates.iter().any(|(cpv, _)| lockstep(cpv)),
+                _ => false,
+            })
+            .map(|(i, _)| i)
+            .collect();
+        out.push((report, blockers, covered));
+    }
+    out
+}
+
+/// Start "Check this fix" for the first held-back update in the preview that a
+/// keyword change explains (for `PORTAGEHUB_SCRIPT`). Returns whether it started.
+pub fn check_first_fix(app: &mut App) -> bool {
+    let Some(plan) = app.emerge.plan.clone() else { return false };
+    let mut reports = Vec::new();
+    for p in &plan.problems {
+        if let Problem::Skipped { slot_key, candidate, required } = p {
+            reports.extend(cached_report(app, slot_key, |data, testing| skipfix::analyze(slot_key, candidate, required, testing, |k| versions_of(data, k))));
+        }
+    }
+    for (blocked, slot, blockers) in blocker_groups(&plan) {
+        let key = crate::portage::atom::split_cpv(&blocked).map(|(c, n, _)| format!("{c}/{n}")).unwrap_or_default();
+        reports.extend(cached_report(app, &format!("{key}:{slot}"), |data, testing| {
+            skipfix::analyze_blocked(&blocked, &slot, &blockers, &plan.pulled_in, testing, |k| versions_of(data, k))
+        }));
+    }
+    let Some(r) = reports.into_iter().find(|r| r.causes().next().is_some()) else { return false };
+    let fixes = skip_fixes(app, &r, false);
+    let changes = skip_changes(app, &fixes, &r.candidate);
+    app.push(Action::CheckFix { slot_key: r.slot_key.clone(), changes, exact: false });
+    true
+}
+
+/// Unresolved blockers that all come from one new version whose siblings the
+/// user's keywords hold back: one card with the fix instead of one per blocker.
+fn blocked_body(app: &mut App, ui: &mut Ui, report: &SkipReport, blockers: &[String], folded: usize) {
+    ui.label(w::dim(format!(
+        "{} replaces older versions of {} installed package(s) at the same time, and emerge could not move all of them, so nothing is merged.",
+        report.candidate,
+        blockers.len()
+    )));
+    keyword_fix_section(app, ui, report);
+    if folded > 0 {
+        ui.label(w::dim(format!("{folded} more problem(s) in emerge's report (slot conflicts, blockers it resolves itself) come from the same update.")));
+    }
+    egui::CollapsingHeader::new(format!("Blockers emerge listed ({})", blockers.len())).id_salt(("blocked-raw", &report.candidate)).show(ui, |ui| {
+        ui.label(w::mono(blockers.join("\n")));
+    });
+}
+
+/// The packages the user's keywords hold back, with the fix, "Check this fix",
+/// "Apply and re-check", and what else holds the update back.
+fn keyword_fix_section(app: &mut App, ui: &mut Ui, report: &SkipReport) {
+    let (slot_key, candidate) = (report.slot_key.as_str(), report.candidate.as_str());
+    let arch = app.data.arch();
+    let causes: Vec<&Pinned> = report.causes().collect();
+    if !causes.is_empty() {
+        ui.add_space(4.0);
+        ui.label(w::strong(format!("Your keyword settings hold back {} package(s) that have to move together with {candidate}:", causes.len())));
+        let exact = app.emerge.fix_check.as_ref().is_some_and(|f| f.slot_key == slot_key && f.exact && Some(f.for_job) == app.emerge.pretend_job);
+        let fixes = skip_fixes(app, report, exact);
+        for p in &causes {
+            let Outcome::Keyword { version, kw, .. } = &p.outcome else { continue };
+            ui.horizontal_wrapped(|ui| {
+                ui.label(w::mono(&p.key));
+                ui.label(w::dim(format!("{} → {version}", p.installed)));
+                w::badge(ui, &kw.label(&arch), WHITE, Color32::from_rgb(0x6b, 0x4a, 0x1e));
+                match fixes.iter().find(|(k, _)| *k == p.key).map(|(_, f)| f) {
+                    Some(KeywordFix::Replace { path, old, new, .. }) => {
+                        ui.label(w::dim(format!("{}:", file_label(path))));
+                        ui.label(w::mono(old));
+                        ui.label(w::dim("→"));
+                        ui.label(w::mono(new.render()));
+                    }
+                    Some(KeywordFix::Add { path, line }) => {
+                        ui.label(w::dim(format!("add to {}:", file_label(path))));
+                        ui.label(w::mono(line));
+                    }
+                    None => {}
+                }
+                if w::icon_button(ui, icon::INFO, "Open package").clicked() {
+                    app.push(Action::Open(p.key.clone()));
+                }
+            });
+        }
+        let checking = app.emerge.fix_check.as_ref().is_some_and(|f| f.plan.is_none() && app.job(f.job).is_some_and(|j| j.running()));
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled_ui(!fixes.is_empty() && !checking, |ui| w::primary(ui, icon::FLASK, "Check this fix"))
+                .inner
+                .on_hover_text("Runs this preview again against a private copy of /etc/portage with these changes. Nothing is written.")
+                .clicked()
+            {
+                let changes = skip_changes(app, &fixes, candidate);
+                app.push(Action::CheckFix { slot_key: slot_key.to_string(), changes, exact });
+            }
+            if ui.add_enabled_ui(!fixes.is_empty(), |ui| w::button(ui, icon::CHECK, "Apply and re-check")).inner.clicked() {
+                let changes = skip_changes(app, &fixes, candidate);
+                app.push(Action::Write {
+                    title: format!("Let {} package(s) follow {candidate}", causes.len()),
+                    changes,
+                    reload: vec![Reload::Config],
+                    then: Some(Box::new(Action::RePretend)),
+                });
+            }
+        });
+        fix_check_result(app, ui, report, exact);
+    }
+    for p in &report.pinned {
+        if let Outcome::Blocked { version, why } = &p.outcome {
+            ui.label(RichText::new(format!("{}-{version}, which would work with {candidate}, is {why}: a keyword change does not help.", p.key)).color(ORANGE));
+        }
+    }
+    let list = |f: fn(&Outcome) -> bool| report.pinned.iter().filter(|p| f(&p.outcome)).map(|p| p.key.as_str()).collect::<Vec<_>>().join(", ");
+    let none = list(|o| matches!(o, Outcome::NoVersion));
+    if !none.is_empty() {
+        ui.label(w::dim(format!("{none}: no version that works with {candidate} exists yet. emerge takes the update once there is one.")));
+    }
+    let unknown = list(|o| matches!(o, Outcome::Unknown));
+    if !unknown.is_empty() {
+        ui.label(w::dim(format!("{unknown}: not found in the loaded repositories.")));
+    }
+    let follows = list(|o| matches!(o, Outcome::Follows(_)));
+    if !follows.is_empty() {
+        ui.label(w::dim(format!("Will update along with it: {follows}.")));
+    }
+}
+
+/// The rows emerge printed. Pins from the user's own sets stay visible with an
+/// edit button; the rest is collapsed.
+fn skipped_requirements(app: &mut App, ui: &mut Ui, pi: usize, candidate: &str, required: &[(String, String)]) {
+    let row = |app: &mut App, ui: &mut Ui, atom: &str, by: &str| {
+        ui.horizontal(|ui| {
+            ui.label(w::mono(atom));
+            ui.label(w::dim("required by"));
+            ui.label(w::strong(by));
+            if let Some(set) = by.strip_prefix('@') {
+                let path = std::path::PathBuf::from(format!("/etc/portage/sets/{set}"));
+                if path.exists()
+                    && w::primary(ui, icon::PENCIL_SIMPLE, &format!("Edit set {by}"))
+                        .on_hover_text(format!("Change or remove {atom} to allow {candidate}"))
+                        .clicked()
+                {
+                    app.config_view.page = super::config::Page::Kind(ConfKind::Sets);
+                    app.config_view.file_filter = Some(path);
+                    app.push(Action::Tab(Tab::Config));
+                }
+            } else if let Some(k) = pretend::requirer_cpv(by).and_then(|c| crate::portage::atom::split_cpv(&c)).map(|(c, p, _)| format!("{c}/{p}"))
+                && w::button(ui, icon::INFO, "Open package").clicked()
+            {
+                app.push(Action::Open(k));
+            }
+        });
+    };
+    let sets: Vec<&(String, String)> = required.iter().filter(|(_, by)| by.starts_with('@')).collect();
+    for (atom, by) in &sets {
+        row(app, ui, atom, by);
+    }
+    if !sets.is_empty() {
+        ui.label(w::dim("Your own set pins this version. Edit the set if you want the new one; otherwise this is expected."));
+    }
+    egui::CollapsingHeader::new(format!("Everything emerge listed ({})", required.len())).id_salt(("skip-raw", pi)).show(ui, |ui| {
+        for (atom, by) in required.iter().filter(|(_, by)| !by.starts_with('@')) {
+            row(app, ui, atom, by);
+        }
+    });
+}
+
+/// Result of "Check this fix": the preview emerge gave with the changes applied.
+fn fix_check_result(app: &mut App, ui: &mut Ui, report: &SkipReport, exact: bool) {
+    let Some(fc) = app.emerge.fix_check.as_ref() else { return };
+    if fc.slot_key != report.slot_key || Some(fc.for_job) != app.emerge.pretend_job {
+        return;
+    }
+    let Some(job) = app.job(fc.job).cloned() else { return };
+    let Some(plan) = fc.plan.clone() else {
+        if job.running() {
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new().size(16.0).color(ACCENT));
+                ui.label(w::dim(format!("Checking with a private copy of /etc/portage… {:.0}s", job.started.elapsed().as_secs_f32())));
+            });
+        }
+        return;
+    };
+    let still = plan.problems.iter().any(|p| match p {
+        Problem::Skipped { slot_key, .. } => *slot_key == report.slot_key,
+        Problem::Blocker { blocked, resolved: false, .. } => *blocked == report.candidate,
+        _ => false,
+    });
+    let blocking: Vec<String> = plan.problems.iter().filter(|p| p.is_blocking()).map(|p| p.title()).collect();
+    let total = if plan.total_line.is_empty() { "emerge printed no merge list.".to_string() } else { plan.total_line.clone() };
+    if still {
+        w::callout(ui, ORANGE, icon::WARNING, &format!("{} is still held back with this fix. {total}", report.candidate));
+    } else if !blocking.is_empty() || !plan.suggestions.is_empty() || plan.exit_code != Some(0) {
+        let mut what = blocking.clone();
+        what.extend(plan.suggestions.iter().map(|s| format!("{} needs {}", s.kind.file_name(), s.line)));
+        if what.is_empty() {
+            what.push("an error (see the output below)".into());
+        }
+        w::callout(ui, ORANGE, icon::WARNING, &format!("{} is no longer skipped, but emerge reports: {}. {total}", report.candidate, what.join("; ")));
+    } else {
+        w::callout(ui, GREEN, icon::CHECK_CIRCLE, &format!("With this fix emerge takes {}. {total}", report.candidate));
+    }
+    let gone: Vec<&str> = plan.entries.iter().filter(|e| e.kind == EntryType::Uninstall).map(|e| e.cpv.as_str()).collect();
+    if !gone.is_empty() {
+        ui.label(RichText::new(format!("It also uninstalls {} (blocked by the new version). Make sure you don't need them.", gone.join(", "))).color(ORANGE));
+    }
+    let rebuilds = plan.merge_entries().filter(|e| e.has('r')).count();
+    if rebuilds >= 10
+        && app.data.env.as_ref().is_some_and(|e| e.get("EMERGE_DEFAULT_OPTS").split_whitespace().any(|o| o == "--keep-going" || o == "--keep-going=y"))
+    {
+        ui.label(w::dim(format!(
+            "{rebuilds} packages get rebuilt against the new version. Your EMERGE_DEFAULT_OPTS has --keep-going: if one of them fails, emerge drops the rest and can leave a resume list that no longer works. Consider running this update with --keep-going=n."
+        )));
+    }
+    // A cause went past the version it was checked for: offer exact pins.
+    let past: Vec<String> = report
+        .causes()
+        .filter_map(|p| {
+            let Outcome::Keyword { version, .. } = &p.outcome else { return None };
+            let want = Version::parse(version)?;
+            plan.merge_entries()
+                .filter(|e| e.key == p.key)
+                .find_map(|e| Version::parse(&e.version).filter(|v| *v > want))
+                .map(|v| format!("{} {}", p.key, v.raw))
+        })
+        .collect();
+    if !past.is_empty() && !exact {
+        ui.label(RichText::new(format!("emerge would go further than the checked versions: {}.", past.join(", "))).color(ORANGE));
+        if w::button(ui, icon::PUSH_PIN, "Pin to the checked versions and check again").clicked() {
+            let fixes = skip_fixes(app, report, true);
+            let changes = skip_changes(app, &fixes, &report.candidate);
+            app.push(Action::CheckFix { slot_key: report.slot_key.clone(), changes, exact: true });
+        }
+    }
+    egui::CollapsingHeader::new("Output of the check").id_salt(("fix-check-out", job.id)).show(ui, |ui| {
+        log_view(ui, &job, "", false, false, 300.0);
+    });
 }
 
 fn plan_table(app: &mut App, ui: &mut Ui, plan: &Plan) {

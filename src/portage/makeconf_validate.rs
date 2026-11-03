@@ -9,6 +9,7 @@
 //! 3. `preview`: the effective values the candidate would give, from the real
 //!    Portage with a temporary PORTAGE_CONFIGROOT that uses the real profile.
 
+use super::configroot::Scratch;
 use super::makeconf::MAKE_CONF;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -149,25 +150,6 @@ pub fn strict_parse(path: &Path) -> ParseCheck {
     ParseCheck::Unavailable(line.strip_prefix("UNAVAILABLE ").unwrap_or(&String::from_utf8_lossy(&out.stderr)).trim().to_string())
 }
 
-/// A private scratch directory, removed on drop.
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new(tag: &str) -> std::io::Result<Scratch> {
-        use std::os::unix::fs::DirBuilderExt;
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-        let p = std::env::temp_dir().join(format!("portagehub-{tag}-{}-{nanos}", std::process::id()));
-        std::fs::DirBuilder::new().mode(0o700).create(&p)?;
-        Ok(Scratch(p))
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
 /// Write the candidate make.conf (single file, or the whole directory with
 /// changed files replaced) below `dir`; returns its path.
 fn materialize(dir: &Path, changed: &[(PathBuf, String)]) -> std::io::Result<PathBuf> {
@@ -204,7 +186,7 @@ pub fn check_candidate(changed: &[(PathBuf, String)]) -> ParseCheck {
         Ok(s) => s,
         Err(e) => return ParseCheck::Unavailable(e.to_string()),
     };
-    match materialize(&scratch.0, changed) {
+    match materialize(scratch.path(), changed) {
         Ok(path) => strict_parse(&path),
         Err(e) => ParseCheck::Unavailable(e.to_string()),
     }
@@ -253,7 +235,7 @@ pub fn effective(vars: &[&str]) -> Result<BTreeMap<String, String>, String> {
 /// with a temporary config root that shares the real profile and repos.conf.
 pub fn preview(changed: &[(PathBuf, String)], vars: &[&str]) -> Result<BTreeMap<String, String>, String> {
     let scratch = Scratch::new("preview").map_err(|e| e.to_string())?;
-    let etc = scratch.0.join("etc/portage");
+    let etc = scratch.path().join("etc/portage");
     std::fs::create_dir_all(&etc).map_err(|e| e.to_string())?;
     materialize(&etc, changed).map_err(|e| e.to_string())?;
     let profile = std::fs::canonicalize("/etc/portage/make.profile").map_err(|e| format!("make.profile: {e}"))?;
@@ -261,7 +243,7 @@ pub fn preview(changed: &[(PathBuf, String)], vars: &[&str]) -> Result<BTreeMap<
     if Path::new("/etc/portage/repos.conf").exists() {
         std::os::unix::fs::symlink("/etc/portage/repos.conf", etc.join("repos.conf")).map_err(|e| e.to_string())?;
     }
-    envvar(Some(&scratch.0), vars)
+    envvar(Some(scratch.path()), vars)
 }
 
 #[cfg(test)]
@@ -302,7 +284,7 @@ mod tests {
     #[test]
     fn portage_parser_is_the_authority() {
         let dir = Scratch::new("test").unwrap();
-        let p = dir.0.join("make.conf");
+        let p = dir.path().join("make.conf");
         std::fs::write(&p, "COMMON_FLAGS=\"-O2 -pipe\"\nCFLAGS=\"${COMMON_FLAGS}\"\n").unwrap();
         match strict_parse(&p) {
             ParseCheck::Unavailable(why) => eprintln!("Portage not available, skipping: {why}"),

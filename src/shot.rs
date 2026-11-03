@@ -21,6 +21,8 @@ pub enum Step {
     Root(String),
     WriteTest,
     Apply,
+    /// "Check this fix" on the first held-back update the preview can fix.
+    CheckFix,
     CheckWorld,
     MPage(String),
     HPage(String),
@@ -68,6 +70,7 @@ impl Script {
                 "root" => Step::Root(v.to_string()),
                 "writetest" => Step::WriteTest,
                 "apply" => Step::Apply,
+                "checkfix" => Step::CheckFix,
                 "checkworld" => Step::CheckWorld,
                 "mpage" => Step::MPage(v.to_string()),
                 "hpage" => Step::HPage(v.to_string()),
@@ -235,6 +238,11 @@ pub fn run(app: &mut App, ctx: &egui::Context, script: &mut Script) {
                 kind: crate::app::JobKind::BootScan,
                 reload: vec![],
             }),
+            Step::CheckFix => {
+                if !crate::views::emerge::check_first_fix(app) {
+                    eprintln!("checkfix: no keyword fix in the current preview");
+                }
+            }
             Step::Apply => {
                 if let Some(r) = app.review.take() {
                     app.apply_changes(r.title, r.changes, r.reload, r.then);

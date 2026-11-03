@@ -274,6 +274,19 @@ impl App {
                     self.toast(ToastKind::Error, format!("{} failed: {}", job.title, job.error.clone().unwrap_or_default()));
                 }
             }
+            JobKind::FixCheck => {
+                if let Some(fc) = self.emerge.fix_check.as_mut()
+                    && fc.job == job.id
+                {
+                    let mut plan = pretend::parse(&job.output(), job.exit.flatten());
+                    if let Some(e) = &job.error {
+                        plan.messages.push(e.clone());
+                    }
+                    fc.plan = Some(plan);
+                    // Removes the private copy of /etc/portage.
+                    fc.root = None;
+                }
+            }
             JobKind::WorldCheck => {
                 if self.world_job == Some(job.id) {
                     self.world_job = None;
